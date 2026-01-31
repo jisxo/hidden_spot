@@ -1,8 +1,10 @@
+import React from "react";
 import { useState } from "react";
 import { ChevronDown, ChevronUp, MapPin, Navigation, Star, X, Utensils, Sparkles, Lightbulb, Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Card, CardContent } from "@/components/ui/card";
+import DynamicTasteChart from "./DynamicTasteChart";
 
 interface RestaurantCardProps {
     restaurant: any;
@@ -105,47 +107,111 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
                         <Utensils size={14} className="text-slate-300" />
                         <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">추천 메뉴</h3>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                        {restaurant.must_eat_menus?.map((menu: string) => (
-                            <Badge key={menu} variant="secondary" className="bg-white border-slate-100 text-slate-700 px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-sm">
-                                {menu}
-                            </Badge>
-                        ))}
+                    <div className="flex flex-wrap gap-x-2 gap-y-3 pt-1">
+                        {restaurant.must_eat_menus?.map((menu: string) => {
+                            const isSignature = menu.includes("⭐");
+                            const displayName = menu.replace("⭐", "").trim();
+
+                            return (
+                                <div key={menu} className="relative">
+                                    {isSignature && (
+                                        <div className="absolute -top-2 -left-2 bg-orange-500 text-white rounded-full p-1 shadow-md z-10 animate-bounce transition-all duration-1000" style={{ animationIterationCount: '2' }}>
+                                            <Star size={10} fill="currentColor" strokeWidth={3} />
+                                        </div>
+                                    )}
+                                    <Badge variant="secondary" className={`bg-white border-slate-100 text-slate-700 px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-sm ${isSignature ? 'border-orange-200 ring-1 ring-orange-100/50' : ''}`}>
+                                        {displayName}
+                                    </Badge>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
 
-                {/* AI Insights Section */}
-                <div className="space-y-4">
+                {/* AI Insights Section (New Review Digest UI) */}
+                <div className="space-y-6">
                     <div className="flex items-center gap-2 py-1">
                         <Sparkles size={16} className="text-orange-500 fill-orange-500" />
                         <h3 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">AI 미식 가이드</h3>
                     </div>
 
-                    <div className="grid gap-2.5">
-                        <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
-                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">맛과 특징</span>
-                            <p className="text-slate-700 text-[13px] leading-relaxed font-medium">
-                                {restaurant.summary_json?.taste}
-                            </p>
+                    {/* 1. Catchy Headline & Tags */}
+                    {restaurant.summary_json?.one_line_copy && (
+                        <div className="space-y-3">
+                            <h4 className="text-lg md:text-xl font-black text-slate-900 leading-tight">
+                                "{restaurant.summary_json.one_line_copy}"
+                            </h4>
+                            <div className="flex flex-wrap gap-1.5">
+                                {restaurant.summary_json.tags?.map((tag: string) => (
+                                    <span key={tag} className="text-[11px] font-bold text-orange-600 bg-orange-50 px-2.5 py-1 rounded-lg">
+                                        {tag}
+                                    </span>
+                                ))}
+                            </div>
                         </div>
+                    )}
 
-                        <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-1 h-full bg-blue-500" />
-                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">공간 & 분위기</span>
-                            <p className="text-slate-700 text-[13px] leading-relaxed font-medium">
-                                {restaurant.summary_json?.vibe}
-                            </p>
+                    {/* 2. Pro Tips (Secret Note) - Moved here as requested */}
+                    {restaurant.summary_json?.pro_tips?.length > 0 && (
+                        <div className="bg-amber-50 rounded-2xl p-5 border-l-4 border-l-amber-400 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 right-0 p-2 opacity-10">
+                                <Lightbulb size={40} className="text-amber-600" />
+                            </div>
+                            <h3 className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-3">Secret Note (Pro Tips)</h3>
+                            <ul className="space-y-3">
+                                {restaurant.summary_json.pro_tips.map((tip: string, idx: number) => (
+                                    <li key={idx} className="text-slate-800 text-[13px] font-black leading-snug flex items-start gap-2">
+                                        <Sparkles size={12} className="shrink-0 mt-0.5 text-amber-500" />
+                                        {tip}
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
+                    )}
 
-                        <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-1 h-full bg-orange-600" />
-                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">전문가 팁</span>
-                            <p className="text-slate-700 text-[13px] leading-relaxed font-medium">
-                                {restaurant.summary_json?.tip}
-                            </p>
+                    {/* 3. Dynamic Taste Profile */}
+                    {restaurant.summary_json?.taste_profile && (
+                        <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+                            <DynamicTasteChart
+                                categoryName={restaurant.summary_json.taste_profile.category_name}
+                                metrics={restaurant.summary_json.taste_profile.metrics || []}
+                            />
+
+                            {/* Fallback for old data format if metrics are missing */}
+                            {(!restaurant.summary_json.taste_profile.metrics || restaurant.summary_json.taste_profile.metrics.length === 0) && (
+                                <div className="space-y-4 pt-4">
+                                    {restaurant.summary_json.taste_profile.broth && (
+                                        <div className="flex justify-between items-center text-[11px] font-bold text-slate-500">
+                                            <span>국물: {restaurant.summary_json.taste_profile.broth}</span>
+                                        </div>
+                                    )}
+                                    {restaurant.summary_json.taste_profile.meat_texture && (
+                                        <div className="flex justify-between items-center text-[11px] font-bold text-slate-500">
+                                            <span>식감: {restaurant.summary_json.taste_profile.meat_texture}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
-                    </div>
+                    )}
+
+                    {/* 4. Negative Points (Check Point) */}
+                    {restaurant.summary_json?.negative_points?.length > 0 && (
+                        <div className="bg-rose-50/50 rounded-2xl p-4 border border-rose-100">
+                            <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                                <X size={12} strokeWidth={3} />
+                                Check Point
+                            </h3>
+                            <ul className="space-y-2">
+                                {restaurant.summary_json.negative_points.map((point: string, idx: number) => (
+                                    <li key={idx} className="text-slate-600 text-[12px] font-bold leading-relaxed flex items-start gap-1.5 opacity-80">
+                                        <span className="shrink-0 mt-1.5 w-1 h-1 rounded-full bg-rose-300" />
+                                        {point}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             </CardContent>
         </Card>

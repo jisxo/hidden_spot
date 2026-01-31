@@ -146,8 +146,20 @@ export default function Home() {
         const errorData = await res.json();
         throw new Error(errorData.detail || "Analysis failed");
       }
-      const newRestaurant = await res.json();
-      setSelectedRestaurant(newRestaurant);
+      const data = await res.json();
+
+      // Print Backend Debug Logs
+      if (data.debug_logs && data.debug_logs.length > 0) {
+        console.group("%c[Backend Crawler Debug]", "color: #ff9800; font-weight: bold;");
+        data.debug_logs.forEach((log: string) => console.log(log));
+        console.groupEnd();
+      }
+
+      console.log("=== RAW REVIEWS COLLECTED FROM NAVER MAPS ===");
+      console.log(data.raw_reviews?.join("\n\n---\n\n") || "No reviews found or returned from cache.");
+      console.log("=============================================");
+
+      setSelectedRestaurant(data.restaurant);
       setIsListVisible(false); // Hide list when a specific restaurant is analyzed and selected
       fetchRestaurants();
     } catch (err: any) {
@@ -185,9 +197,21 @@ export default function Home() {
       });
       if (!res.ok) throw new Error("Refresh failed");
 
-      const updated = await res.json();
+      const data = await res.json();
+
+      // Print Backend Debug Logs
+      if (data.debug_logs && data.debug_logs.length > 0) {
+        console.group("%c[Backend Crawler Debug]", "color: #ff9800; font-weight: bold;");
+        data.debug_logs.forEach((log: string) => console.log(log));
+        console.groupEnd();
+      }
+
+      console.log("=== RAW REVIEWS RE-COLLECTED FROM NAVER MAPS ===");
+      console.log(data.raw_reviews?.join("\n\n---\n\n") || "No reviews found.");
+      console.log("=================================================");
+
       if (selectedRestaurant?.id === id) {
-        setSelectedRestaurant(updated);
+        setSelectedRestaurant(data.restaurant);
       }
       fetchRestaurants();
     } catch (err) {
