@@ -45,6 +45,7 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 
 export default function Home() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -130,7 +131,7 @@ export default function Home() {
     try {
       const params = new URLSearchParams();
       if (minScore > 0) params.append("min_score", minScore.toString());
-      const res = await fetch(`http://localhost:8000/api/v1/restaurants?${params.toString()}`);
+      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setRestaurants(data);
@@ -170,7 +171,7 @@ export default function Home() {
   const handleAnalyze = async (url: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/api/v1/restaurants/analyze", {
+      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
@@ -193,7 +194,7 @@ export default function Home() {
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`http://localhost:8000/api/v1/restaurants/${id}`, { method: "DELETE" });
+      await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}`, { method: "DELETE" });
       if (selectedRestaurant?.id === id) setSelectedRestaurant(null);
       fetchRestaurants();
     } catch (err) {
@@ -206,7 +207,7 @@ export default function Home() {
   const handleRefresh = async (id: string) => {
     setRefreshingId(id);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/restaurants/${id}/refresh`, { method: "POST" });
+      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}/refresh`, { method: "POST" });
       if (!res.ok) throw new Error("Refresh failed");
       const data = await res.json();
       if (selectedRestaurant?.id === id) setSelectedRestaurant(data.restaurant);
