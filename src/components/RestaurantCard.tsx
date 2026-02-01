@@ -15,7 +15,7 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
     if (!restaurant) return null;
 
     return (
-        <Card className="bg-white/95 backdrop-blur-xl border-none md:border-slate-200 md:ring-1 md:ring-black/5 rounded-t-[32px] md:rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.12)] p-0 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden flex flex-col h-full md:h-auto select-none">
+        <Card className="bg-white/95 backdrop-blur-xl border-none md:border-slate-200 md:ring-1 md:ring-black/5 rounded-t-[32px] md:rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.12)] p-0 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden flex flex-col h-full md:h-full select-none">
             {/* Mobile Drag Handle */}
             <div className="md:hidden w-full flex justify-center pt-2.5 absolute top-0 left-0 z-30 pointer-events-none">
                 <div className="w-10 h-1.5 bg-white/20 rounded-full" />
