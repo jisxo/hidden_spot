@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Trash2, RefreshCw, Plus, List, Search, X } from "lucide-react";
+import { RefreshCw, List, Search, X, Plus } from "lucide-react";
+import staticRestaurants from "@/data/restaurants.json";
 import {
   Dialog,
   DialogContent,
@@ -44,8 +45,7 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 }
 
 export default function Home() {
-  const [restaurants, setRestaurants] = useState<any[]>([]);
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const [restaurants, setRestaurants] = useState<any[]>(staticRestaurants);
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -126,23 +126,15 @@ export default function Home() {
     setVisibleCount(prev => prev + 15);
   };
 
-  // Fetch Logic
+  // Fetch Logic (Disabled for Static Version)
   const fetchRestaurants = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (minScore > 0) params.append("min_score", minScore.toString());
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      setRestaurants(data);
-    } catch (err) {
-      console.error(err);
-    }
-  }, [minScore]);
+    // Already initialized with staticRestaurants
+  }, []);
 
   useEffect(() => {
-    fetchRestaurants();
+    // No-op
   }, [fetchRestaurants]);
+
 
   // Initial Sorting Center
   useEffect(() => {
@@ -169,55 +161,15 @@ export default function Home() {
   };
 
   const handleAnalyze = async (url: string) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Analysis failed");
-      }
-      const data = await res.json();
-      setSelectedRestaurant(data.restaurant);
-      setIsListVisible(false);
-      fetchRestaurants();
-    } catch (err: any) {
-      console.error(err);
-      alert(`분석 중 오류 발생: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
+    alert("이 버전은 프로젝트 데모용 정적 페이지입니다. 새로운 맛집 등록은 로컬 환경에서 백엔드를 실행해야 가능합니다.");
   };
 
   const handleDelete = async (id: string) => {
-    try {
-      await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}`, { method: "DELETE" });
-      if (selectedRestaurant?.id === id) setSelectedRestaurant(null);
-      fetchRestaurants();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setConfirmDeleteId(null);
-    }
+    alert("이 버전에서는 삭제 기능이 비활성화되어 있습니다.");
   };
 
   const handleRefresh = async (id: string) => {
-    setRefreshingId(id);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}/refresh`, { method: "POST" });
-      if (!res.ok) throw new Error("Refresh failed");
-      const data = await res.json();
-      if (selectedRestaurant?.id === id) setSelectedRestaurant(data.restaurant);
-      fetchRestaurants();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRefreshingId(null);
-      setConfirmRefreshId(null);
-    }
+    alert("이 버전에서는 업데이트 기능이 비활성화되어 있습니다.");
   };
 
   return (
@@ -232,7 +184,7 @@ export default function Home() {
           <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-[10px] font-black px-2 py-0.5 rounded-md border-none">BETA</Badge>
         </header>
 
-        <div className="p-4 flex-none hidden md:block">
+        <div className="p-4 flex-none hidden md:block opacity-50 grayscale pointer-events-none">
           <AddUrlForm onAnalyze={handleAnalyze} isLoading={isLoading} />
         </div>
 
@@ -343,9 +295,11 @@ export default function Home() {
             <DialogTrigger asChild>
               <button className="w-14 h-14 bg-slate-900 rounded-full shadow-2xl flex items-center justify-center text-white"><Plus size={28} /></button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px] rounded-3xl p-0 bg-transparent border-none shadow-none">
-              <AddUrlForm onAnalyze={(url) => { handleAnalyze(url); setIsRegisterOpen(false); }} isLoading={isLoading} />
-            </DialogContent>
+            <div className="bg-white rounded-3xl p-8 text-center space-y-4">
+              <h3 className="font-black text-slate-900">데모 버전 안내</h3>
+              <p className="text-xs text-slate-500 font-bold">이 페이지는 호스팅 데모용 정적 버전입니다.<br />새로운 맛집 등록 기능은 로컬 환경에서 사용해 주세요.</p>
+              <Button onClick={() => setIsRegisterOpen(false)} className="w-full bg-slate-900 rounded-2xl h-12 font-bold text-white">확인</Button>
+            </div>
           </Dialog>
         </div>
 
