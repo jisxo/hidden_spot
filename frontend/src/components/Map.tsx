@@ -76,7 +76,9 @@ export default function Map({ restaurants, selectedId, onMarkerClick, onMapClick
         } else {
             // Initial centering on the first restaurant if no specific one is selected
             const first = restaurants[0];
-            map.setCenter(new window.naver.maps.LatLng(first.latitude, first.longitude));
+            if (first && first.latitude && first.longitude) {
+                map.setCenter(new window.naver.maps.LatLng(first.latitude, first.longitude));
+            }
         }
     }, [map, selectedId, restaurants]);
 
