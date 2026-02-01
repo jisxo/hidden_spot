@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import { Trash2, RefreshCw, Plus, List, Search, X } from "lucide-react";
 import {
   Dialog,
@@ -43,7 +44,7 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   return R * c;
 }
 
-export default function Home() {
+function HomeContent() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -223,7 +224,7 @@ export default function Home() {
   };
 
   return (
-    <main className="relative w-full h-screen overflow-hidden bg-white font-sans text-slate-900 flex flex-col md:flex-row">
+    <main className="relative w-full h-screen overflow-hidden bg-white font-sans text-slate-900 flex flex-col md:flex-row" suppressHydrationWarning>
       {/* Sidebar Area */}
       <aside className={`order-2 md:order-1 w-full md:w-[400px] bg-slate-50 border-t md:border-t-0 md:border-r border-slate-200 z-20 flex flex-col relative shadow-[0_-10px_30px_rgba(0,0,0,0.05)] md:shadow-none transition-all duration-300 ${isListVisible ? 'h-[50vh] md:h-full' : 'h-0 md:h-full overflow-hidden md:overflow-visible'}`}>
         <header className="p-6 bg-white border-b border-slate-100 flex-none z-10 flex items-center justify-between">
@@ -403,3 +404,10 @@ export default function Home() {
     </main>
   );
 }
+
+const Home = dynamic(() => Promise.resolve(HomeContent), {
+  ssr: false,
+  loading: () => <div className="min-h-screen bg-slate-50" />,
+});
+
+export default Home;
