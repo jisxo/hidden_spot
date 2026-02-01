@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn
+import traceback
 
 from crawler import NaverMapsCrawler
 from ai_analyzer import AIAnalyzer
@@ -98,7 +99,8 @@ async def analyze_restaurant(request: AnalyzeRequest):
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
     finally:
         await crawler.close_browser()
 

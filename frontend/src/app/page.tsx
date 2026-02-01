@@ -175,7 +175,10 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       });
-      if (!res.ok) throw new Error("Analysis failed");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || "Analysis failed");
+      }
       const data = await res.json();
       setSelectedRestaurant(data.restaurant);
       setIsListVisible(false);

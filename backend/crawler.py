@@ -221,7 +221,7 @@ class NaverMapsCrawler:
             if not lat or not lng:
                 try:
                     # Look for coords in common Naver Maps JS state objects
-                    js_coords = await page.evaluate("""() => {
+                    js_coords = await page.evaluate(r"""() => {
                         try {
                             // 1. Check window.__INITIAL_STATE__
                             const state = window.__INITIAL_STATE__;
