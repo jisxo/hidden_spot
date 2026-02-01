@@ -1,10 +1,8 @@
 [build]
   base = "frontend"
-  publish = ".next"
   command = "npm run build"
+  publish = ".next"
 
 [build.environment]
-  NEXT_USE_NETLIFY_EDGE = "true"
-
-[[plugins]]
-  package = "@netlify/plugin-nextjs"
+  NODE_VERSION = "20"
+  NPM_FLAGS = "--version"
