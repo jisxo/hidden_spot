@@ -66,11 +66,19 @@ export default function Map({ restaurants, selectedId, onMarkerClick, onMapClick
     const markersRef = useRef<any[]>([]);
 
     useEffect(() => {
-        if (!map || !restaurants || !selectedId) return;
+        if (!map || !restaurants || restaurants.length === 0) return;
 
-        const selected = restaurants.find(res => res.id === selectedId);
-        if (selected) {
-            map.panTo(new window.naver.maps.LatLng(selected.latitude, selected.longitude));
+        if (selectedId) {
+            const selected = restaurants.find(res => res.id === selectedId);
+            if (selected) {
+                map.panTo(new window.naver.maps.LatLng(selected.latitude, selected.longitude));
+            }
+        } else {
+            // Initial centering on the first restaurant if no specific one is selected
+            const first = restaurants[0];
+            if (first && first.latitude && first.longitude) {
+                map.setCenter(new window.naver.maps.LatLng(first.latitude, first.longitude));
+            }
         }
     }, [map, selectedId, restaurants]);
 

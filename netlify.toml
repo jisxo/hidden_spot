@@ -4,7 +4,9 @@
   command = "npm run build"
 
 [build.environment]
-  NEXT_USE_NETLIFY_EDGE = "true"
+  NODE_VERSION = "20"
+  NPM_FLAGS = "--version"
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_NAVER_MAPS_CLIENT_ID"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"

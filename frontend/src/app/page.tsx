@@ -46,10 +46,29 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 export default function Home() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [minScore, setMinScore] = useState(0);
+
+  // Fetch Logic moved to useEffect to avoid hydration mismatch
+  const fetchRestaurants = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (minScore > 0) params.append("min_score", minScore.toString());
+      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      setRestaurants(data);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [minScore, API_BASE_URL]);
+
+  useEffect(() => {
+    fetchRestaurants();
+  }, [fetchRestaurants]);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [isListVisible, setIsListVisible] = useState(false);
@@ -126,23 +145,6 @@ export default function Home() {
     setVisibleCount(prev => prev + 15);
   };
 
-  // Fetch Logic
-  const fetchRestaurants = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (minScore > 0) params.append("min_score", minScore.toString());
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      setRestaurants(data);
-    } catch (err) {
-      console.error(err);
-    }
-  }, [minScore]);
-
-  useEffect(() => {
-    fetchRestaurants();
-  }, [fetchRestaurants]);
 
   // Initial Sorting Center
   useEffect(() => {
@@ -344,6 +346,10 @@ export default function Home() {
               <button className="w-14 h-14 bg-slate-900 rounded-full shadow-2xl flex items-center justify-center text-white"><Plus size={28} /></button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[425px] rounded-3xl p-0 bg-transparent border-none shadow-none">
+              <DialogHeader className="sr-only">
+                <DialogTitle>맛집 등록</DialogTitle>
+                <DialogDescription>새로운 맛집의 네이버 지도 URL을 입력하여 분석합니다.</DialogDescription>
+              </DialogHeader>
               <AddUrlForm onAnalyze={(url) => { handleAnalyze(url); setIsRegisterOpen(false); }} isLoading={isLoading} />
             </DialogContent>
           </Dialog>
