@@ -295,11 +295,13 @@ export default function Home() {
             <DialogTrigger asChild>
               <button className="w-14 h-14 bg-slate-900 rounded-full shadow-2xl flex items-center justify-center text-white"><Plus size={28} /></button>
             </DialogTrigger>
-            <div className="bg-white rounded-3xl p-8 text-center space-y-4">
-              <h3 className="font-black text-slate-900">데모 버전 안내</h3>
-              <p className="text-xs text-slate-500 font-bold">이 페이지는 호스팅 데모용 정적 버전입니다.<br />새로운 맛집 등록 기능은 로컬 환경에서 사용해 주세요.</p>
-              <Button onClick={() => setIsRegisterOpen(false)} className="w-full bg-slate-900 rounded-2xl h-12 font-bold text-white">확인</Button>
-            </div>
+            <DialogContent className="sm:max-w-[425px] rounded-3xl p-0 bg-transparent border-none shadow-none">
+              <div className="bg-white rounded-3xl p-8 text-center space-y-4">
+                <h3 className="font-black text-slate-900">데모 버전 안내</h3>
+                <p className="text-xs text-slate-500 font-bold">이 페이지는 호스팅 데모용 정적 버전입니다.<br />새로운 맛집 등록 기능은 로컬 환경에서 사용해 주세요.</p>
+                <Button onClick={() => setIsRegisterOpen(false)} className="w-full bg-slate-900 rounded-2xl h-12 font-bold text-white">확인</Button>
+              </div>
+            </DialogContent>
           </Dialog>
         </div>
 
