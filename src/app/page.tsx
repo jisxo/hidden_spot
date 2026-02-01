@@ -103,17 +103,30 @@ export default function Home() {
     });
   }, [restaurants, searchKeyword, minScore, selectedCategory, SMART_CATEGORIES]);
 
-  // Separate state for sorting center to prevent list jumping on selection
-  const [userMapCenter, setUserMapCenter] = useState({ lat: 37.5665, lng: 126.9780 });
+  // State for the center point used for sorting the list
+  const [listSortCenter, setListSortCenter] = useState<{ lat: number; lng: number } | null>(null);
 
   const sortedRestaurants = useMemo(() => {
+    if (!listSortCenter) return [...filteredRestaurants];
+
     return [...filteredRestaurants].sort((a, b) => {
-      // Use userMapCenter for sorting, not the visual mapCenter
-      const distA = Math.pow(a.latitude - userMapCenter.lat, 2) + Math.pow(a.longitude - userMapCenter.lng, 2);
-      const distB = Math.pow(b.latitude - userMapCenter.lat, 2) + Math.pow(b.longitude - userMapCenter.lng, 2);
+      const distA = Math.pow(a.latitude - listSortCenter.lat, 2) + Math.pow(a.longitude - listSortCenter.lng, 2);
+      const distB = Math.pow(b.latitude - listSortCenter.lat, 2) + Math.pow(b.longitude - listSortCenter.lng, 2);
       return distA - distB;
     });
-  }, [filteredRestaurants, userMapCenter]);
+  }, [filteredRestaurants, listSortCenter]);
+
+  // Handle manual list refresh based on current map center
+  const handleRefreshList = () => {
+    setListSortCenter(mapCenter);
+  };
+
+  // Initial list center setup when map first loads
+  useEffect(() => {
+    if (mapCenter && !listSortCenter) {
+      setListSortCenter(mapCenter);
+    }
+  }, [mapCenter, listSortCenter]);
 
   const fetchRestaurants = useCallback(async () => {
     try {
@@ -389,7 +402,7 @@ export default function Home() {
                       <h3 className="font-black text-slate-800 text-[15px] leading-tight group-hover:text-orange-600 transition-colors uppercase tracking-tight truncate">{res.name}</h3>
                       <div className="flex flex-col gap-1.5 mt-2 overflow-hidden">
                         <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400 truncate">
+                          <div className="flex-none flex items-center gap-1 text-[10px] font-bold text-slate-400 truncate">
                             <MapPin size={10} className="shrink-0" />
                             <span className="truncate">{res.address.split(' ').slice(0, 2).join(' ')}</span>
                           </div>
@@ -483,11 +496,24 @@ export default function Home() {
           }}
           onCenterChange={(lat, lng) => {
             setMapCenter({ lat, lng });
-            if (!selectedRestaurant) {
-              setUserMapCenter({ lat, lng });
-            }
           }}
         />
+
+        {/* Search in this area button */}
+        {mapCenter && listSortCenter && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 transition-all md:top-auto md:bottom-10">
+            <Button
+              onClick={handleRefreshList}
+              className={`bg-white/95 backdrop-blur-md text-slate-900 border border-slate-200 rounded-full px-6 h-11 font-black text-xs shadow-2xl hover:bg-slate-900 hover:text-white transition-all gap-2 transform active:scale-95 ${Math.abs(mapCenter.lat - listSortCenter.lat) < 0.0001 && Math.abs(mapCenter.lng - listSortCenter.lng) < 0.0001
+                  ? 'opacity-0 scale-90 pointer-events-none'
+                  : 'opacity-100 scale-100'
+                }`}
+            >
+              <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+              현지도에서 재검색
+            </Button>
+          </div>
+        )}
 
         {/* Loading Overlay */}
         {isLoading && (

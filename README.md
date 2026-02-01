@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Hidden Spot - AI 기반 맛집 큐레이션 서비스
 
-## Getting Started
+네이버 지도 리뷰를 AI로 분석하여 심층적인 맛집 정보를 제공하는 서비스입니다. 이 프로젝트는 **FastAPI(Python) 백엔드**와 **Next.js(React) 프론트엔드**로 구성되어 있습니다.
 
-First, run the development server:
+## 📂 프로젝트 구조
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```text
+hidden-spot/
+├── backend/          # Python FastAPI 서버 (리뷰 크롤링 및 AI 분석)
+├── frontend/         # Next.js 프론트엔드 (UI 및 지도 연동)
+├── spec.md           # 서비스 상세 기획서
+└── supabase_schema.sql # 데이터베이스 초기 설정 스크립트
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 🚀 실행 방법
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+이 프로젝트는 두 개의 서버(백엔드, 프론트엔드)를 각각 별도로 실행해야 합니다.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 1. 백엔드 (Python FastAPI)
+백엔드는 가상 환경(`venv`)을 사용하여 종속성을 관리합니다. **`node_modules`를 사용하지 않습니다.**
 
-## Learn More
+```bash
+cd backend
+source venv/bin/activate    # 가상 환경 활성화 (Windows: venv\Scripts\activate)
+pip install -r requirements.txt # (최초 1회) 필요한 패키지 설치
+python3 main.py             # 서버 실행 (기본 포트: 8000)
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 2. 프론트엔드 (Next.js)
+프론트엔드는 Node.js 환경에서 실행되며 **`node_modules`가 필요합니다.**
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+cd frontend
+npm install                 # (최초 1회) 종속성 설치
+npm run dev                 # 개발 서버 실행 (기본 포트: 3000)
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## ⚠️ 주의 사항
+- **Node.js 버전**: `v24.12.0` 사용을 권장합니다.
+- **환경 변수**: `frontend/.env.local` 및 `backend/.env` 파일에 필요한 API 키가 설정되어 있는지 확인하세요.
+- **경로**: 명령어를 실행할 때 반드시 해당 디렉토리(`backend` 또는 `frontend`)로 이동(`cd`)한 후 실행해야 합니다. 프로젝트 루트 폴더에서 직접 `npm` 명령어를 실행하면 `node_modules`를 찾지 못할 수 있습니다.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+© 2026 Hidden Spot.
