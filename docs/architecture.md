@@ -6,6 +6,47 @@
 - Data lake: MinIO Bronze/Silver/Gold + Artifacts
 - Serving DB: Postgres/Supabase-compatible schema (`stores`, `store_snapshots`, `analysis`)
 
+## Diagram Labels
+- User / Frontend
+- FastAPI Job API
+- Redis Queue (RQ)
+- Worker Orchestrator
+- Crawl Stage (Playwright)
+- Parse Stage (HTML -> JSONL + DQ)
+- LLM Stage (Chunk Map-Reduce)
+- Embedding Stage (Optional)
+- MinIO Bronze
+- MinIO Silver
+- MinIO Gold
+- MinIO Artifacts
+- Serving DB (Postgres/Supabase)
+- Smart Search API (Synonym + Vector Optional)
+- Observability (run_id / stage logs / error_reason)
+
+## Mermaid
+```mermaid
+flowchart LR
+  U[User / Web] --> A[FastAPI Job API]
+  A -->|POST /jobs| Q[Redis Queue RQ]
+  A -->|GET /jobs/{id}| S[(store_snapshots status)]
+
+  Q --> W[Worker]
+  W --> C[Crawl: Playwright]
+  C --> B[(MinIO Bronze)]
+
+  B --> P[Parse + DQ]
+  P --> SI[(MinIO Silver)]
+
+  SI --> L[LLM Chunk Map-Reduce]
+  L --> G[(MinIO Gold)]
+  L --> AR[(MinIO Artifacts)]
+
+  L --> D[(Postgres analysis upsert)]
+  D --> SS[Smart Search API]
+
+  W --> O[JSON Logs run_id/stage/duration]
+```
+
 ## End-to-end flow
 1. User submits Naver Map URL to API.
 2. API creates `run_id`, derives `store_id`, inserts `store_snapshots(status=queued)`, enqueues worker task.

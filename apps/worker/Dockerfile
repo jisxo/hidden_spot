@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM mcr.microsoft.com/playwright/python:v1.58.0-jammy
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -6,11 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY apps/worker/requirements.txt /tmp/requirements.txt
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates \
-  && rm -rf /var/lib/apt/lists/* \
-  && pip install --no-cache-dir -r /tmp/requirements.txt \
-  && playwright install chromium
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY . /app
 

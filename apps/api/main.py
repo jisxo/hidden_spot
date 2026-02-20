@@ -3,9 +3,8 @@ import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from redis import Redis
-from rq import Queue
+from rq import Queue, Retry
 from rq.job import Job
-from rq.retry import Retry
 
 from apps.api.db import ApiDatabase
 from apps.api.search import expand_query

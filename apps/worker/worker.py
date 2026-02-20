@@ -1,7 +1,7 @@
 import os
 
 from redis import Redis
-from rq import Connection, Queue, Worker
+from rq import Queue, Worker
 
 
 def main() -> None:
@@ -9,9 +9,9 @@ def main() -> None:
     queue_name = os.getenv("RQ_QUEUE", "hidden_spot")
 
     conn = Redis.from_url(redis_url)
-    with Connection(conn):
-        worker = Worker([Queue(queue_name)])
-        worker.work(with_scheduler=True)
+    queue = Queue(queue_name, connection=conn)
+    worker = Worker([queue], connection=conn)
+    worker.work(with_scheduler=True)
 
 
 if __name__ == "__main__":
