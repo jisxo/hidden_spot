@@ -64,3 +64,47 @@ class WorkerDatabase:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         print(json.dumps(event, ensure_ascii=False))
+
+    def upsert_analysis(
+        self,
+        store_id: str,
+        collected_at: str,
+        run_id: str,
+        summary_3lines: str,
+        vibe: str,
+        signature_menu: list,
+        tips: list,
+        score: float,
+        ad_review_ratio: float,
+    ) -> None:
+        sql = """
+        INSERT INTO analysis
+            (store_id, collected_at, run_id, summary_3lines, vibe, signature_menu_json, tips_json, score, ad_review_ratio, updated_at)
+        VALUES
+            (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
+        ON CONFLICT (run_id)
+        DO UPDATE SET
+            summary_3lines = EXCLUDED.summary_3lines,
+            vibe = EXCLUDED.vibe,
+            signature_menu_json = EXCLUDED.signature_menu_json,
+            tips_json = EXCLUDED.tips_json,
+            score = EXCLUDED.score,
+            ad_review_ratio = EXCLUDED.ad_review_ratio,
+            updated_at = NOW();
+        """
+        with self.conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        store_id,
+                        collected_at,
+                        run_id,
+                        summary_3lines,
+                        vibe,
+                        json.dumps(signature_menu, ensure_ascii=False),
+                        json.dumps(tips, ensure_ascii=False),
+                        score,
+                        ad_review_ratio,
+                    ),
+                )

@@ -1,13 +1,22 @@
 import asyncio
+import json
 import time
 from datetime import datetime
 
 from apps.worker.crawler import NaverMapsCrawler
 from apps.worker.db import WorkerDatabase
 from apps.worker.dq import DQError, validate_reviews
+from apps.worker.llm import ChunkedAnalyzer
 from apps.worker.parser import parse_reviews_html, to_jsonl
 from libs.common import KeyParts, MinioDataLakeClient, sha256_bytes
-from libs.common.object_keys import artifacts_hash_index, bronze_reviews_html_gz, bronze_store_meta, silver_reviews_jsonl
+from libs.common.object_keys import (
+    artifacts_chunk_map,
+    artifacts_hash_index,
+    bronze_reviews_html_gz,
+    bronze_store_meta,
+    gold_analysis_json,
+    silver_reviews_jsonl,
+)
 
 
 def _now_ms() -> int:
@@ -50,11 +59,25 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         )
         db.update_snapshot(run_id=run_id, status="parsed", progress=65, silver_path=parse_result["silver_path"])
 
+        llm_start = _now_ms()
+        db.update_snapshot(run_id=run_id, status="analyzing", progress=75)
+        llm_result = process_llm(minio=minio, db=db, parts=parts, run_id=run_id, collected_at_iso=collected_at_iso)
+        llm_duration = _now_ms() - llm_start
+        db.log_event(
+            run_id=run_id,
+            stage="llm",
+            status="ok",
+            duration_ms=llm_duration,
+            payload={"chunk_count": llm_result["chunk_count"], "token_total": llm_result["tokens"]["total"]},
+        )
+        db.update_snapshot(run_id=run_id, status="completed", progress=100, gold_path=llm_result["gold_path"])
+
         return {
             "run_id": run_id,
-            "status": "parsed",
+            "status": "completed",
             "bronze_path": crawl_result["bronze_meta_path"],
             "silver_path": parse_result["silver_path"],
+            "gold_path": llm_result["gold_path"],
         }
     except DQError as exc:
         db.log_event(run_id=run_id, stage="dq", status="failed", duration_ms=0, payload={"error": str(exc)})
@@ -138,3 +161,62 @@ def process_parse(minio: MinioDataLakeClient, parts: KeyParts, run_id: str) -> d
         "review_count": len(parsed_reviews),
         "silver_path": f"s3://{minio.silver_bucket}/{silver_key}",
     }
+
+
+def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts, run_id: str, collected_at_iso: str) -> dict:
+    analyzer = ChunkedAnalyzer()
+    silver_key = silver_reviews_jsonl(parts)
+    jsonl_text = minio.get_bytes(minio.silver_bucket, silver_key).decode("utf-8")
+    reviews = []
+    for line in jsonl_text.splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("text"):
+            reviews.append(rec["text"])
+
+    analysis = analyzer.analyze(reviews=reviews)
+    final = analysis["result"]
+
+    chunk_key = artifacts_chunk_map(parts)
+    minio.put_json(minio.artifacts_bucket, chunk_key, analysis["chunk_summaries"])
+
+    gold_payload = {
+        "run_id": run_id,
+        "collected_at": collected_at_iso,
+        "store_id": parts.store_id,
+        "crawler_version": "v1",
+        "parser_version": "v1",
+        "llm_model": analysis["llm_model"],
+        "prompt_version": analysis["prompt_version"],
+        "prompt_hash": analysis["prompt_hash"],
+        "input_snapshot_path": f"s3://{minio.silver_bucket}/{silver_key}",
+        "cost": None,
+        "tokens": analysis["tokens"],
+        "chunk_count": analysis["chunk_count"],
+        "analysis": {
+            "summary_3lines": final.get("summary_3lines", ""),
+            "vibe": final.get("vibe", ""),
+            "signature_menu": final.get("signature_menu", []),
+            "tips": final.get("tips", []),
+            "score": final.get("score", 0),
+            "ad_review_ratio": final.get("ad_review_ratio", 0.0),
+        },
+    }
+
+    gold_key = gold_analysis_json(parts)
+    minio.put_json(minio.gold_bucket, gold_key, gold_payload)
+
+    db.upsert_analysis(
+        store_id=parts.store_id,
+        collected_at=collected_at_iso,
+        run_id=run_id,
+        summary_3lines=gold_payload["analysis"]["summary_3lines"],
+        vibe=gold_payload["analysis"]["vibe"],
+        signature_menu=gold_payload["analysis"]["signature_menu"],
+        tips=gold_payload["analysis"]["tips"],
+        score=float(gold_payload["analysis"]["score"]),
+        ad_review_ratio=float(gold_payload["analysis"]["ad_review_ratio"]),
+    )
+
+    return {"gold_path": f"s3://{minio.gold_bucket}/{gold_key}", "chunk_count": analysis["chunk_count"], "tokens": analysis["tokens"]}
