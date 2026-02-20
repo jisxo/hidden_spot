@@ -6,6 +6,7 @@ from datetime import datetime
 from apps.worker.crawler import NaverMapsCrawler
 from apps.worker.db import WorkerDatabase
 from apps.worker.dq import DQError, validate_reviews
+from apps.worker.embeddings import EmbeddingGenerator
 from apps.worker.llm import ChunkedAnalyzer
 from apps.worker.parser import parse_reviews_html, to_jsonl
 from libs.common import KeyParts, MinioDataLakeClient, sha256_bytes
@@ -69,6 +70,17 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             status="ok",
             duration_ms=llm_duration,
             payload={"chunk_count": llm_result["chunk_count"], "token_total": llm_result["tokens"]["total"]},
+        )
+
+        embed_start = _now_ms()
+        db.update_snapshot(run_id=run_id, status="embedding", progress=90)
+        embedded = process_embedding(db=db, parts=parts, analysis_result=llm_result["analysis"])
+        db.log_event(
+            run_id=run_id,
+            stage="embed",
+            status="ok",
+            duration_ms=_now_ms() - embed_start,
+            payload={"embedded": embedded},
         )
         db.update_snapshot(run_id=run_id, status="completed", progress=100, gold_path=llm_result["gold_path"])
 
@@ -219,4 +231,29 @@ def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts,
         ad_review_ratio=float(gold_payload["analysis"]["ad_review_ratio"]),
     )
 
-    return {"gold_path": f"s3://{minio.gold_bucket}/{gold_key}", "chunk_count": analysis["chunk_count"], "tokens": analysis["tokens"]}
+    return {
+        "gold_path": f"s3://{minio.gold_bucket}/{gold_key}",
+        "chunk_count": analysis["chunk_count"],
+        "tokens": analysis["tokens"],
+        "analysis": gold_payload["analysis"],
+    }
+
+
+def process_embedding(db: WorkerDatabase, parts: KeyParts, analysis_result: dict) -> bool:
+    text = "\n".join(
+        [
+            analysis_result.get("summary_3lines", ""),
+            analysis_result.get("vibe", ""),
+            " ".join(analysis_result.get("signature_menu", [])),
+        ]
+    ).strip()
+    if not text:
+        return False
+
+    generator = EmbeddingGenerator()
+    vector = generator.embed(text)
+    if not vector:
+        return False
+
+    db.upsert_embedding(store_id=parts.store_id, doc_type="analysis_summary", vector=vector)
+    return True

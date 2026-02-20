@@ -108,3 +108,15 @@ class WorkerDatabase:
                         ad_review_ratio,
                     ),
                 )
+
+    def upsert_embedding(self, store_id: str, doc_type: str, vector: list[float]) -> None:
+        vector_literal = "[" + ",".join(f"{v:.8f}" for v in vector) + "]"
+        sql = """
+        INSERT INTO embeddings (store_id, doc_type, vector, updated_at)
+        VALUES (%s, %s, %s::vector, NOW())
+        ON CONFLICT (store_id, doc_type)
+        DO UPDATE SET vector = EXCLUDED.vector, updated_at = NOW();
+        """
+        with self.conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (store_id, doc_type, vector_literal))

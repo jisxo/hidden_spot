@@ -113,3 +113,41 @@ class ApiDatabase:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT * FROM store_snapshots WHERE run_id = %s", (run_id,))
                 return cur.fetchone()
+
+    def smart_search(self, terms: list[str], limit: int = 20):
+        pattern_terms = [f"%{t}%" for t in terms if t]
+        where_clauses = []
+        params = []
+        for _ in pattern_terms:
+            where_clauses.append(
+                "(COALESCE(a.summary_3lines, '') ILIKE %s OR COALESCE(a.vibe, '') ILIKE %s OR COALESCE(s.name, '') ILIKE %s)"
+            )
+        for p in pattern_terms:
+            params.extend([p, p, p])
+
+        where_sql = " OR ".join(where_clauses) if where_clauses else "TRUE"
+        sql = f"""
+        SELECT
+            s.store_id,
+            s.url,
+            s.name,
+            s.lat,
+            s.lng,
+            a.summary_3lines,
+            a.vibe,
+            a.signature_menu_json,
+            a.score,
+            a.ad_review_ratio,
+            a.updated_at
+        FROM analysis a
+        JOIN stores s ON s.store_id = a.store_id
+        WHERE {where_sql}
+        ORDER BY a.updated_at DESC
+        LIMIT %s;
+        """
+        params.append(limit)
+
+        with self.conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, tuple(params))
+                return cur.fetchall()

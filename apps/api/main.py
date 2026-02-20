@@ -8,6 +8,7 @@ from rq.job import Job
 from rq.retry import Retry
 
 from apps.api.db import ApiDatabase
+from apps.api.search import expand_query
 from apps.api.store_id import derive_store_id
 from libs.common.run_context import new_run_id, utc_now, isoformat_z
 
@@ -91,6 +92,13 @@ def get_job(job_id: str):
 
     snapshot["queue_status"] = queue_status
     return snapshot
+
+
+@app.get("/search/smart")
+def smart_search(q: str, limit: int = 20):
+    terms = expand_query(q)
+    rows = _db.smart_search(terms=terms, limit=limit)
+    return {"query": q, "expanded_terms": terms, "count": len(rows), "items": rows}
 
 
 @app.get("/health")
