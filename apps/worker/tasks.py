@@ -4,8 +4,10 @@ from datetime import datetime
 
 from apps.worker.crawler import NaverMapsCrawler
 from apps.worker.db import WorkerDatabase
+from apps.worker.dq import DQError, validate_reviews
+from apps.worker.parser import parse_reviews_html, to_jsonl
 from libs.common import KeyParts, MinioDataLakeClient, sha256_bytes
-from libs.common.object_keys import artifacts_hash_index, bronze_reviews_html_gz, bronze_store_meta
+from libs.common.object_keys import artifacts_hash_index, bronze_reviews_html_gz, bronze_store_meta, silver_reviews_jsonl
 
 
 def _now_ms() -> int:
@@ -34,7 +36,30 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             progress=35,
             bronze_path=crawl_result["bronze_meta_path"],
         )
-        return {"run_id": run_id, "status": "crawled", "bronze_path": crawl_result["bronze_meta_path"]}
+
+        parse_start = _now_ms()
+        db.update_snapshot(run_id=run_id, status="parsing", progress=45)
+        parse_result = process_parse(minio=minio, parts=parts, run_id=run_id)
+        parse_duration = _now_ms() - parse_start
+        db.log_event(
+            run_id=run_id,
+            stage="parse",
+            status="ok",
+            duration_ms=parse_duration,
+            payload={"review_count": parse_result["review_count"]},
+        )
+        db.update_snapshot(run_id=run_id, status="parsed", progress=65, silver_path=parse_result["silver_path"])
+
+        return {
+            "run_id": run_id,
+            "status": "parsed",
+            "bronze_path": crawl_result["bronze_meta_path"],
+            "silver_path": parse_result["silver_path"],
+        }
+    except DQError as exc:
+        db.log_event(run_id=run_id, stage="dq", status="failed", duration_ms=0, payload={"error": str(exc)})
+        db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
+        raise
     except Exception as exc:
         db.log_event(run_id=run_id, stage="crawl", status="failed", duration_ms=0, payload={"error": str(exc)})
         db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
@@ -80,4 +105,36 @@ def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: 
         "review_count": int(data.get("review_count", 0)),
         "bronze_meta_path": f"s3://{minio.bronze_bucket}/{meta_key}",
         "bronze_html_path": f"s3://{minio.bronze_bucket}/{html_key}",
+    }
+
+
+def process_parse(minio: MinioDataLakeClient, parts: KeyParts, run_id: str) -> dict:
+    meta_key = bronze_store_meta(parts)
+    meta = minio.get_json(minio.bronze_bucket, meta_key)
+
+    html_key = meta.get("html_key")
+    html = ""
+    if meta.get("html_saved", False) and html_key:
+        html = minio.get_gzip_text(minio.bronze_bucket, html_key)
+    else:
+        hash_key = artifacts_hash_index(meta["content_hash"])
+        hash_meta = minio.get_json(minio.artifacts_bucket, hash_key)
+        first_seen = hash_meta["first_seen_html_key"]
+        html = minio.get_gzip_text(minio.bronze_bucket, first_seen)
+
+    parsed_reviews = parse_reviews_html(html=html, fallback_reviews=meta.get("reviews", []))
+    validate_reviews(parsed_reviews, store_id=parts.store_id, collected_at=parts.collected_at_iso)
+
+    silver_key = silver_reviews_jsonl(parts)
+    minio.put_bytes(
+        minio.silver_bucket,
+        silver_key,
+        to_jsonl(parsed_reviews).encode("utf-8"),
+        content_type="application/x-ndjson",
+    )
+
+    return {
+        "run_id": run_id,
+        "review_count": len(parsed_reviews),
+        "silver_path": f"s3://{minio.silver_bucket}/{silver_key}",
     }
