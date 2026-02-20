@@ -9,21 +9,21 @@
   --color-foreground: #0f172a;
   /* Slate-900 */
 
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui;
-  --font-display: var(--font-outfit), ui-serif, Georgia;
+  --font-sans: "Pretendard", "Noto Sans KR", ui-sans-serif, system-ui;
+  --font-display: "Pretendard", "Noto Sans KR", ui-sans-serif, system-ui;
 }
 
 @layer base {
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: var(--font-inter), sans-serif;
+    font-family: var(--font-sans);
   }
 
   h1,
   h2,
   h3,
   .font-display {
-    font-family: var(--font-outfit), sans-serif;
+    font-family: var(--font-display);
   }
 }
 
