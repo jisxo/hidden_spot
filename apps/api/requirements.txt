@@ -1,0 +1,9 @@
+fastapi==0.128.0
+uvicorn==0.40.0
+pydantic==2.12.4
+python-dotenv==1.2.1
+redis==6.4.0
+rq==2.6.0
+psycopg2-binary==2.9.10
+minio==7.2.18
+google-generativeai==0.8.6
