@@ -1,4 +1,7 @@
-# Hidden Spot Backend Manual Test Checklist
+# Hidden Spot API/Worker Manual Test Checklist
+
+> This checklist targets `apps/api` + `apps/worker` runtime.
+> `backend/` is a legacy folder and is not the execution target.
 
 자동 테스트 도구 없이 백엔드 API/파이프라인을 점검하기 위한 수동 테스트 항목입니다.
 

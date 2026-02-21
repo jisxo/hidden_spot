@@ -2,6 +2,13 @@
 
 네이버 지도 URL 기반 매장 분석 서비스를, 동기 요청형 앱에서 **재처리 가능한 데이터 엔지니어링 파이프라인**으로 업그레이드한 프로젝트입니다.
 
+## Runtime Source Of Truth
+- Active runtime services:
+  - API: `apps/api`
+  - Worker: `apps/worker`
+  - Compose entry: `infra/docker-compose.yml`
+- Legacy (do not run/deploy/test target): `backend/`
+
 ## What This Project Demonstrates
 - MinIO 기반 데이터 레이크 분리: Bronze / Silver / Gold / Artifacts
 - FastAPI + Redis/RQ 기반 비동기 Job 처리 (202 응답, 상태 조회, 재시도)

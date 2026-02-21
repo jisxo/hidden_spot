@@ -1,5 +1,12 @@
 # Hidden Spot Data Engineering Architecture
 
+## Runtime Source Of Truth
+- Active runtime services:
+  - API: `apps/api`
+  - Worker: `apps/worker`
+  - Compose entry: `infra/docker-compose.yml`
+- Legacy (do not run/deploy/test target): `backend/`
+
 ## Overview
 - Ingestion trigger: `POST /jobs` (FastAPI)
 - Execution model: Redis + RQ worker (retry enabled)
