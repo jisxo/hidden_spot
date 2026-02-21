@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,6 +9,14 @@ import traceback
 from crawler import NaverMapsCrawler
 from ai_analyzer import AIAnalyzer
 from database import db
+
+# Legacy backend execution guard: active runtime lives in apps/api + apps/worker.
+if os.getenv("ALLOW_LEGACY_BACKEND", "").lower() not in {"1", "true", "yes"}:
+    raise RuntimeError(
+        "Legacy backend is disabled. Use apps/api and apps/worker "
+        "(compose: infra/docker-compose.yml). "
+        "Set ALLOW_LEGACY_BACKEND=1 only for explicit legacy debugging."
+    )
 
 app = FastAPI(title="Hidden Spot API")
 
