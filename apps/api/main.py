@@ -15,6 +15,23 @@ from apps.api.store_id import derive_store_id
 from libs.common.run_context import new_run_id, utc_now, isoformat_z
 
 
+def _parse_cors_allow_origins() -> list[str]:
+    default = "http://localhost:3000,http://127.0.0.1:3000"
+    raw = (os.getenv("CORS_ALLOW_ORIGINS", default) or "").strip()
+    if not raw:
+        raw = default
+    if raw == "*":
+        return ["*"]
+
+    origins: list[str] = []
+    for token in raw.split(","):
+        origin = token.strip().rstrip("/")
+        if origin:
+            origins.append(origin)
+
+    return origins or [o.rstrip("/") for o in default.split(",")]
+
+
 class JobCreateRequest(BaseModel):
     url: str | None = None
     source_url: str | None = None
@@ -44,10 +61,7 @@ class AnalyzeCompatRequest(BaseModel):
 app = FastAPI(title="Hidden Spot Jobs API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_parse_cors_allow_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

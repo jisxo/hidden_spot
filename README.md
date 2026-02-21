@@ -86,3 +86,6 @@ curl http://localhost:8000/jobs/<run_id>
 
 ## Frontend
 프론트 실행 가이드는 `frontend/README.md`를 참고하세요.
+
+## Deployment
+- Stable deployment guide (Netlify + Render + R2): `docs/deploy-netlify-render-r2.md`
