@@ -37,6 +37,16 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
 
         crawler = NaverMapsCrawler()
         crawl_result = process_crawl(crawler=crawler, minio=minio, parts=parts, run_id=run_id, url=url)
+        db.upsert_store(
+            store_id=parts.store_id,
+            url=url,
+            naver_place_id=crawl_result.get("naver_place_id"),
+            name=crawl_result.get("name"),
+            address=crawl_result.get("address"),
+            transport_info=crawl_result.get("address"),
+            lat=crawl_result.get("latitude"),
+            lng=crawl_result.get("longitude"),
+        )
 
         duration = _now_ms() - crawl_start
         db.log_event(run_id=run_id, stage="crawl", status="ok", duration_ms=duration, payload={"review_count": crawl_result["review_count"]})
@@ -49,7 +59,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
 
         parse_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="parsing", progress=45)
-        parse_result = process_parse(minio=minio, parts=parts, run_id=run_id)
+        parse_result = process_parse(minio=minio, db=db, parts=parts, run_id=run_id)
         parse_duration = _now_ms() - parse_start
         db.log_event(
             run_id=run_id,
@@ -62,7 +72,15 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
 
         llm_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="analyzing", progress=75)
-        llm_result = process_llm(minio=minio, db=db, parts=parts, run_id=run_id, collected_at_iso=collected_at_iso)
+        llm_result = process_llm(
+            minio=minio,
+            db=db,
+            parts=parts,
+            run_id=run_id,
+            collected_at_iso=collected_at_iso,
+            restaurant_name=crawl_result.get("name"),
+            address=crawl_result.get("address"),
+        )
         llm_duration = _now_ms() - llm_start
         db.log_event(
             run_id=run_id,
@@ -70,6 +88,20 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             status="ok",
             duration_ms=llm_duration,
             payload={"chunk_count": llm_result["chunk_count"], "token_total": llm_result["tokens"]["total"]},
+        )
+
+        categories = llm_result["analysis"].get("categories") or []
+        primary_category = categories[0] if isinstance(categories, list) and categories else llm_result["analysis"].get("vibe")
+        db.upsert_store(
+            store_id=parts.store_id,
+            url=url,
+            naver_place_id=crawl_result.get("naver_place_id"),
+            name=crawl_result.get("name"),
+            address=crawl_result.get("address"),
+            transport_info=llm_result["analysis"].get("transport_info") or crawl_result.get("address"),
+            lat=crawl_result.get("latitude"),
+            lng=crawl_result.get("longitude"),
+            category=primary_category,
         )
 
         embed_start = _now_ms()
@@ -126,6 +158,8 @@ def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: 
         "naver_place_id": data.get("naver_place_id"),
         "name": data.get("name"),
         "address": data.get("address"),
+        "latitude": data.get("latitude"),
+        "longitude": data.get("longitude"),
         "review_count": data.get("review_count", 0),
         "reviews": data.get("reviews", []),
         "content_hash": content_hash,
@@ -138,12 +172,17 @@ def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: 
 
     return {
         "review_count": int(data.get("review_count", 0)),
+        "name": data.get("name"),
+        "address": data.get("address"),
+        "latitude": data.get("latitude"),
+        "longitude": data.get("longitude"),
+        "naver_place_id": data.get("naver_place_id"),
         "bronze_meta_path": f"s3://{minio.bronze_bucket}/{meta_key}",
         "bronze_html_path": f"s3://{minio.bronze_bucket}/{html_key}",
     }
 
 
-def process_parse(minio: MinioDataLakeClient, parts: KeyParts, run_id: str) -> dict:
+def process_parse(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts, run_id: str) -> dict:
     meta_key = bronze_store_meta(parts)
     meta = minio.get_json(minio.bronze_bucket, meta_key)
 
@@ -159,6 +198,7 @@ def process_parse(minio: MinioDataLakeClient, parts: KeyParts, run_id: str) -> d
 
     parsed_reviews = parse_reviews_html(html=html, fallback_reviews=meta.get("reviews", []))
     validate_reviews(parsed_reviews, store_id=parts.store_id, collected_at=parts.collected_at_iso)
+    db.upsert_reviews(store_id=parts.store_id, reviews=parsed_reviews)
 
     silver_key = silver_reviews_jsonl(parts)
     minio.put_bytes(
@@ -175,7 +215,15 @@ def process_parse(minio: MinioDataLakeClient, parts: KeyParts, run_id: str) -> d
     }
 
 
-def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts, run_id: str, collected_at_iso: str) -> dict:
+def process_llm(
+    minio: MinioDataLakeClient,
+    db: WorkerDatabase,
+    parts: KeyParts,
+    run_id: str,
+    collected_at_iso: str,
+    restaurant_name: str | None = None,
+    address: str | None = None,
+) -> dict:
     analyzer = ChunkedAnalyzer()
     silver_key = silver_reviews_jsonl(parts)
     jsonl_text = minio.get_bytes(minio.silver_bucket, silver_key).decode("utf-8")
@@ -187,7 +235,7 @@ def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts,
         if rec.get("text"):
             reviews.append(rec["text"])
 
-    analysis = analyzer.analyze(reviews=reviews)
+    analysis = analyzer.analyze(reviews=reviews, context={"name": restaurant_name or "", "address": address or ""})
     final = analysis["result"]
 
     chunk_key = artifacts_chunk_map(parts)
@@ -213,6 +261,9 @@ def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts,
             "tips": final.get("tips", []),
             "score": final.get("score", 0),
             "ad_review_ratio": final.get("ad_review_ratio", 0.0),
+            "review_summary": final.get("review_summary", {}),
+            "categories": final.get("categories", []),
+            "transport_info": final.get("transport_info", ""),
         },
     }
 
@@ -229,6 +280,8 @@ def process_llm(minio: MinioDataLakeClient, db: WorkerDatabase, parts: KeyParts,
         tips=gold_payload["analysis"]["tips"],
         score=float(gold_payload["analysis"]["score"]),
         ad_review_ratio=float(gold_payload["analysis"]["ad_review_ratio"]),
+        review_summary=gold_payload["analysis"]["review_summary"],
+        categories=gold_payload["analysis"]["categories"],
     )
 
     return {
@@ -250,10 +303,12 @@ def process_embedding(db: WorkerDatabase, parts: KeyParts, analysis_result: dict
     if not text:
         return False
 
-    generator = EmbeddingGenerator()
-    vector = generator.embed(text)
-    if not vector:
+    try:
+        generator = EmbeddingGenerator()
+        vector = generator.embed(text)
+        if not vector:
+            return False
+        db.upsert_embedding(store_id=parts.store_id, doc_type="analysis_summary", vector=vector)
+        return True
+    except Exception:
         return False
-
-    db.upsert_embedding(store_id=parts.store_id, doc_type="analysis_summary", vector=vector)
-    return True

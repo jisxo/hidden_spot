@@ -5,7 +5,8 @@ from libs.common.run_context import sha256_text
 
 
 def extract_store_id_from_url(url: str) -> str | None:
-    place_match = re.search(r"/place/(\d+)", url)
+    # Naver place IDs can be numeric or alpha-numeric tokens.
+    place_match = re.search(r"/(?:entry/)?place/([A-Za-z0-9_-]+)", url)
     if place_match:
         return place_match.group(1)
 

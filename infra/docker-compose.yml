@@ -52,6 +52,7 @@ services:
       - ../.env
     environment:
       PYTHONPATH: /app
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:
@@ -70,6 +71,7 @@ services:
       - ../.env
     environment:
       PYTHONPATH: /app
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ..:/app
     depends_on:
