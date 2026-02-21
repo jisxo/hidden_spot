@@ -12,6 +12,7 @@ interface RestaurantCardProps {
 }
 
 export default function RestaurantCard({ restaurant, onClose }: RestaurantCardProps) {
+    const [isInsightExpanded, setIsInsightExpanded] = useState(true);
     if (!restaurant) return null;
 
     return (
@@ -52,7 +53,7 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
                 <div className="mb-5 relative flex flex-col gap-3">
                     <div className="flex items-center gap-1.5 text-slate-500 text-[11px] font-bold tracking-tight">
                         <MapPin size={12} className="shrink-0 text-slate-300" />
-                        <span className="truncate">{restaurant.address}</span>
+                        <span className="break-words">{String(restaurant.address || "정보 없음")}</span>
                         <button
                             onClick={() => {
                                 navigator.clipboard.writeText(restaurant.address);
@@ -130,13 +131,31 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
 
                 {/* AI Insights Section (New Review Digest UI) */}
                 <div className="space-y-6">
-                    <div className="flex items-center gap-2 py-1">
-                        <Sparkles size={16} className="text-orange-500 fill-orange-500" />
-                        <h3 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">AI 미식 가이드</h3>
+                    <div className="flex items-center justify-between gap-2 py-1">
+                        <div className="flex items-center gap-2">
+                            <Sparkles size={16} className="text-orange-500 fill-orange-500" />
+                            <h3 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">AI 미식 가이드</h3>
+                        </div>
+                        <button
+                            onClick={() => setIsInsightExpanded((prev) => !prev)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-slate-500 hover:bg-slate-50"
+                        >
+                            {isInsightExpanded ? (
+                                <>
+                                    Show less
+                                    <ChevronUp size={12} />
+                                </>
+                            ) : (
+                                <>
+                                    Show more
+                                    <ChevronDown size={12} />
+                                </>
+                            )}
+                        </button>
                     </div>
 
                     {/* 1. Catchy Headline & Tags */}
-                    {restaurant.summary_json?.one_line_copy && (
+                    {isInsightExpanded && restaurant.summary_json?.one_line_copy && (
                         <div className="space-y-3">
                             <h4 className="text-lg md:text-xl font-black text-slate-900 leading-tight">
                                 "{restaurant.summary_json.one_line_copy}"
@@ -152,7 +171,7 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
                     )}
 
                     {/* 2. Pro Tips (Secret Note) - Moved here as requested */}
-                    {restaurant.summary_json?.pro_tips?.length > 0 && (
+                    {isInsightExpanded && restaurant.summary_json?.pro_tips?.length > 0 && (
                         <div className="bg-amber-50 rounded-2xl p-5 border-l-4 border-l-amber-400 shadow-sm relative overflow-hidden">
                             <div className="absolute top-0 right-0 p-2 opacity-10">
                                 <Lightbulb size={40} className="text-amber-600" />
@@ -170,7 +189,7 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
                     )}
 
                     {/* 3. Dynamic Taste Profile */}
-                    {restaurant.summary_json?.taste_profile && (
+                    {isInsightExpanded && restaurant.summary_json?.taste_profile && (
                         <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                             <DynamicTasteChart
                                 categoryName={restaurant.summary_json.taste_profile.category_name}
@@ -196,7 +215,7 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
                     )}
 
                     {/* 4. Negative Points (Check Point) */}
-                    {restaurant.summary_json?.negative_points?.length > 0 && (
+                    {isInsightExpanded && restaurant.summary_json?.negative_points?.length > 0 && (
                         <div className="bg-rose-50/50 rounded-2xl p-4 border border-rose-100">
                             <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
                                 <X size={12} strokeWidth={3} />
@@ -217,4 +236,3 @@ export default function RestaurantCard({ restaurant, onClose }: RestaurantCardPr
         </Card>
     );
 }
-

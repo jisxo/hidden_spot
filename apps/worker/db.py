@@ -10,6 +10,7 @@ import psycopg2.extras
 class WorkerDatabase:
     def __init__(self) -> None:
         self.database_url = os.getenv("DATABASE_URL", "postgresql://hidden_spot:hidden_spot@localhost:5432/hidden_spot")
+        self.ensure_columns()
 
     @contextmanager
     def conn(self):
@@ -65,6 +66,55 @@ class WorkerDatabase:
         }
         print(json.dumps(event, ensure_ascii=False))
 
+    def ensure_columns(self) -> None:
+        sql = """
+        DO $$
+        BEGIN
+            IF to_regclass('public.stores') IS NOT NULL THEN
+                ALTER TABLE stores ADD COLUMN IF NOT EXISTS naver_place_id TEXT;
+            END IF;
+            IF to_regclass('public.analysis') IS NOT NULL THEN
+                ALTER TABLE analysis ADD COLUMN IF NOT EXISTS review_summary_json JSONB;
+                ALTER TABLE analysis ADD COLUMN IF NOT EXISTS categories_json JSONB;
+            END IF;
+        END $$;
+        """
+        with self.conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+
+    def upsert_store(
+        self,
+        *,
+        store_id: str,
+        url: str,
+        naver_place_id: str | None = None,
+        name: str | None = None,
+        address: str | None = None,
+        transport_info: str | None = None,
+        lat: float | None = None,
+        lng: float | None = None,
+        category: str | None = None,
+    ) -> None:
+        sql = """
+        INSERT INTO stores (store_id, url, naver_place_id, name, address, transport_info, lat, lng, category)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (store_id)
+        DO UPDATE SET
+            url = EXCLUDED.url,
+            naver_place_id = COALESCE(NULLIF(EXCLUDED.naver_place_id, ''), stores.naver_place_id),
+            name = COALESCE(EXCLUDED.name, stores.name),
+            address = COALESCE(NULLIF(EXCLUDED.address, ''), stores.address),
+            transport_info = COALESCE(NULLIF(EXCLUDED.transport_info, ''), stores.transport_info),
+            lat = COALESCE(EXCLUDED.lat, stores.lat),
+            lng = COALESCE(EXCLUDED.lng, stores.lng),
+            category = COALESCE(EXCLUDED.category, stores.category),
+            updated_at = NOW();
+        """
+        with self.conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (store_id, url, naver_place_id, name, address, transport_info, lat, lng, category))
+
     def upsert_analysis(
         self,
         store_id: str,
@@ -76,12 +126,18 @@ class WorkerDatabase:
         tips: list,
         score: float,
         ad_review_ratio: float,
+        review_summary: dict | None = None,
+        categories: list | None = None,
     ) -> None:
         sql = """
         INSERT INTO analysis
-            (store_id, collected_at, run_id, summary_3lines, vibe, signature_menu_json, tips_json, score, ad_review_ratio, updated_at)
+            (
+                store_id, collected_at, run_id, summary_3lines, vibe,
+                signature_menu_json, tips_json, score, ad_review_ratio,
+                review_summary_json, categories_json, updated_at
+            )
         VALUES
-            (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
+            (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb, NOW())
         ON CONFLICT (run_id)
         DO UPDATE SET
             summary_3lines = EXCLUDED.summary_3lines,
@@ -90,6 +146,8 @@ class WorkerDatabase:
             tips_json = EXCLUDED.tips_json,
             score = EXCLUDED.score,
             ad_review_ratio = EXCLUDED.ad_review_ratio,
+            review_summary_json = EXCLUDED.review_summary_json,
+            categories_json = EXCLUDED.categories_json,
             updated_at = NOW();
         """
         with self.conn() as conn:
@@ -106,6 +164,8 @@ class WorkerDatabase:
                         json.dumps(tips, ensure_ascii=False),
                         score,
                         ad_review_ratio,
+                        json.dumps(review_summary or {}, ensure_ascii=False),
+                        json.dumps(categories or [], ensure_ascii=False),
                     ),
                 )
 
@@ -120,3 +180,32 @@ class WorkerDatabase:
         with self.conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (store_id, doc_type, vector_literal))
+
+    def upsert_reviews(self, store_id: str, reviews: list[dict]) -> None:
+        if not reviews:
+            return
+        sql = """
+        INSERT INTO reviews (store_id, review_key, date, rating, text, is_ad_suspect, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (store_id, review_key)
+        DO UPDATE SET
+            date = EXCLUDED.date,
+            rating = EXCLUDED.rating,
+            text = EXCLUDED.text,
+            is_ad_suspect = EXCLUDED.is_ad_suspect;
+        """
+        values = []
+        for review in reviews:
+            values.append(
+                (
+                    store_id,
+                    str(review.get("review_key") or ""),
+                    review.get("date"),
+                    review.get("rating"),
+                    str(review.get("text") or ""),
+                    bool(review.get("is_ad_suspect") or False),
+                )
+            )
+        with self.conn() as conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_batch(cur, sql, values, page_size=200)

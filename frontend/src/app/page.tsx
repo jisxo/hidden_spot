@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Trash2, RefreshCw, Plus, List, Search, X } from "lucide-react";
+import { RefreshCw, Plus, List, Search, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,17 +11,6 @@ import {
   DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import Map from "@/components/Map";
 import AddUrlForm from "@/components/AddUrlForm";
 import RestaurantCard from "@/components/RestaurantCard";
 import CategoryCarousel from "@/components/CategoryCarousel";
@@ -30,7 +19,15 @@ import RestaurantList from "@/components/RestaurantList";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
+
+const NaverMap = dynamic(() => import("@/components/Map"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full bg-slate-100 flex items-center justify-center">
+      <div className="text-xs font-bold text-slate-500">지도 로딩 중...</div>
+    </div>
+  ),
+});
 
 // Utility: Accurate Distance Calculation (Haversine)
 function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -44,90 +41,181 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   return R * c;
 }
 
+type JobCreateResponse = {
+  job_id: string;
+  run_id: string;
+  store_id: string;
+  status: "queued" | "completed" | string;
+};
+
+type JobSnapshot = {
+  run_id?: string;
+  store_id?: string;
+  status?: string;
+  state?: "queued" | "started" | "completed" | "failed" | string;
+  error_reason?: string | null;
+};
+
+type MapBounds = {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+};
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const DEFAULT_MAP_CENTER = { lat: 37.547241, lng: 127.047325 }; // 뚝섬역
+
+function fallbackRestaurantFromJob(params: { storeId: string; url: string; snapshot?: JobSnapshot | null }) {
+  return {
+    id: params.storeId,
+    naver_place_id: params.storeId,
+    name: params.storeId,
+    address: "",
+    latitude: 37.5665,
+    longitude: 126.978,
+    ai_score: 0,
+    transport_info: "",
+    must_eat_menus: [],
+    search_tags: [],
+    original_url: params.url,
+    summary_json: {
+      tags: [],
+      one_line_copy: "",
+      pro_tips: [],
+      taste_profile: { category_name: params.snapshot?.state || "processing", metrics: [] },
+      negative_points: [],
+    },
+    raw_reviews: [],
+  };
+}
+
 function HomeContent() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [searchKeyword, setSearchKeyword] = useState("");
-  const [minScore, setMinScore] = useState(0);
+  const [inputSearchKeyword, setInputSearchKeyword] = useState("");
+  const [appliedSearchKeyword, setAppliedSearchKeyword] = useState("");
+  const [inputMinScore, setInputMinScore] = useState(0);
+  const [appliedMinScore, setAppliedMinScore] = useState(0);
+  const [isRegisterOpen, setIsRegisterOpen] = useState(false);
+  const [isListVisible, setIsListVisible] = useState(false);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(DEFAULT_MAP_CENTER);
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  const [appliedMapBounds, setAppliedMapBounds] = useState<MapBounds | null>(null);
+  const [listSortCenter, setListSortCenter] = useState<{ lat: number; lng: number } | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [visibleCount, setVisibleCount] = useState(15);
+  const [analysisFeedback, setAnalysisFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [isFeedbackFading, setIsFeedbackFading] = useState(false);
 
-  // Fetch Logic moved to useEffect to avoid hydration mismatch
+  const SMART_CATEGORIES = useMemo(() => [
+    { id: "all", label: "전체", icon: "🍽️", keywords: [] },
+    { id: "soup", label: "탕/찌개", icon: "🥘", keywords: ["탕", "국", "국물", "찌개", "전골", "수프", "해장국", "곰탕", "설렁탕"] },
+    { id: "noodle", label: "면", icon: "🍜", keywords: ["면", "국수", "라면", "파스타", "우동", "소바", "짬뽕", "짜장"] },
+    { id: "meat", label: "고기", icon: "🥩", keywords: ["고기", "구이", "삼겹살", "갈비", "스테이크", "돈카츠", "돈까스", "치킨", "닭"] },
+    { id: "seafood", label: "회", icon: "🍣", keywords: ["회", "일식", "해산물", "사시미", "초밥", "스시", "생선", "조개"] },
+  ], []);
+
   const fetchRestaurants = useCallback(async () => {
     try {
       const params = new URLSearchParams();
-      if (minScore > 0) params.append("min_score", minScore.toString());
+      if (appliedMinScore > 0) params.append("min_score", String(appliedMinScore));
       const res = await fetch(`${API_BASE_URL}/api/v1/restaurants?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      if (!res.ok) throw new Error("Failed to fetch restaurants");
       const data = await res.json();
-      setRestaurants(data);
+      const list = Array.isArray(data) ? data : [];
+      setRestaurants(list);
+      return list;
     } catch (err) {
       console.error(err);
+      setRestaurants([]);
+      return [];
     }
-  }, [minScore, API_BASE_URL]);
+  }, [API_BASE_URL, appliedMinScore]);
 
   useEffect(() => {
     fetchRestaurants();
   }, [fetchRestaurants]);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [isRegisterOpen, setIsRegisterOpen] = useState(false);
-  const [isListVisible, setIsListVisible] = useState(false);
-  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: 37.5665, lng: 126.9780 });
-  const [listSortCenter, setListSortCenter] = useState<{ lat: number; lng: number } | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmRefreshId, setConfirmRefreshId] = useState<string | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [visibleCount, setVisibleCount] = useState(15);
 
-  const SMART_CATEGORIES = useMemo(() => [
-    { id: 'all', label: '전체', icon: '🍽️', keywords: [] },
-    { id: 'soup', label: '탕/찌개', icon: '🥘', keywords: ['탕', '국', '국물', '찌개', '전골', '수프', '해장국', '곰탕', '설렁탕'] },
-    { id: 'noodle', label: '면', icon: '🍜', keywords: ['면', '국수', '라면', '파스타', '우동', '소바', '짬뽕', '짜장'] },
-    { id: 'meat', label: '고기', icon: '🥩', keywords: ['고기', '구이', '삼겹살', '갈비', '스테이크', '돈카츠', '돈까스', '치킨', '닭'] },
-    { id: 'seafood', label: '회', icon: '🍣', keywords: ['회', '일식', '해산물', '사시미', '초밥', '스시', '생선', '조개'] },
-  ], []);
+  const handleCenterChange = useCallback((lat: number, lng: number) => {
+    setMapCenter((prev) => {
+      if (Math.abs(prev.lat - lat) < 0.000001 && Math.abs(prev.lng - lng) < 0.000001) {
+        return prev;
+      }
+      return { lat, lng };
+    });
+  }, []);
+
+  const handleBoundsChange = useCallback((bounds: MapBounds) => {
+    setMapBounds(bounds);
+  }, []);
 
   // Filter Logic
   const filteredRestaurants = useMemo(() => {
     return restaurants.filter((res) => {
-      const searchTerms = [searchKeyword.toLowerCase()];
+      const searchTerms = [appliedSearchKeyword.toLowerCase()];
       const soupKeywords = ['국', '탕', '찌개', '찌게', '전골', '국물'];
-      if (soupKeywords.some(k => searchKeyword.trim() === k)) {
+      if (soupKeywords.some(k => appliedSearchKeyword.trim() === k)) {
         searchTerms.push('뚝배기', '수프');
       }
 
-      const matchesKeyword = searchKeyword === "" || searchTerms.some(term =>
-        res.name.toLowerCase().includes(term) ||
-        res.address.toLowerCase().includes(term) ||
-        res.must_eat_menus?.some((m: string) => m.toLowerCase().includes(term)) ||
-        res.search_tags?.some((t: string) => t.toLowerCase().includes(term))
+      const name = String(res?.name ?? "").toLowerCase();
+      const address = String(res?.address ?? "").toLowerCase();
+      const menus = Array.isArray(res?.must_eat_menus) ? res.must_eat_menus : [];
+      const tags = Array.isArray(res?.search_tags) ? res.search_tags : [];
+
+      const matchesKeyword = appliedSearchKeyword === "" || searchTerms.some(term =>
+        name.includes(term) ||
+        address.includes(term) ||
+        menus.some((m: string) => String(m).toLowerCase().includes(term)) ||
+        tags.some((t: string) => String(t).toLowerCase().includes(term))
       );
 
-      const matchesScore = res.ai_score >= minScore;
+      const matchesScore = Number(res?.ai_score ?? 0) >= appliedMinScore;
 
       let matchesCategory = true;
       if (selectedCategory !== "all") {
         const category = SMART_CATEGORIES.find(c => c.id === selectedCategory);
         if (category) {
-          matchesCategory = res.search_tags?.some((tag: string) =>
-            category.keywords.some(kw => tag.includes(kw))
-          ) || res.must_eat_menus?.some((menu: string) =>
-            category.keywords.some(kw => menu.includes(kw))
+          matchesCategory = tags.some((tag: string) =>
+            category.keywords.some(kw => String(tag).includes(kw))
+          ) || menus.some((menu: string) =>
+            category.keywords.some(kw => String(menu).includes(kw))
           );
         }
       }
 
-      return matchesKeyword && matchesScore && matchesCategory;
+      const lat = Number(res?.latitude);
+      const lng = Number(res?.longitude);
+      const matchesMapArea =
+        !appliedMapBounds ||
+        (Number.isFinite(lat) &&
+          Number.isFinite(lng) &&
+          lat <= appliedMapBounds.north &&
+          lat >= appliedMapBounds.south &&
+          lng <= appliedMapBounds.east &&
+          lng >= appliedMapBounds.west);
+
+      return matchesKeyword && matchesScore && matchesCategory && matchesMapArea;
     });
-  }, [restaurants, searchKeyword, minScore, selectedCategory, SMART_CATEGORIES]);
+  }, [restaurants, appliedSearchKeyword, appliedMinScore, selectedCategory, SMART_CATEGORIES, appliedMapBounds]);
 
   // Sort Logic (Decoupled from real-time map move)
   const sortedRestaurants = useMemo(() => {
     if (!listSortCenter) return [...filteredRestaurants];
     return [...filteredRestaurants].sort((a, b) => {
-      const distA = getDistance(listSortCenter.lat, listSortCenter.lng, a.latitude, a.longitude);
-      const distB = getDistance(listSortCenter.lat, listSortCenter.lng, b.latitude, b.longitude);
+      const aLat = Number(a?.latitude ?? 37.5665);
+      const aLng = Number(a?.longitude ?? 126.978);
+      const bLat = Number(b?.latitude ?? 37.5665);
+      const bLng = Number(b?.longitude ?? 126.978);
+      const distA = getDistance(listSortCenter.lat, listSortCenter.lng, aLat, aLng);
+      const distB = getDistance(listSortCenter.lat, listSortCenter.lng, bLat, bLng);
       return distA - distB;
     });
   }, [filteredRestaurants, listSortCenter]);
@@ -140,7 +228,7 @@ function HomeContent() {
   // Reset pagination when filters change
   useEffect(() => {
     setVisibleCount(15);
-  }, [searchKeyword, minScore, selectedCategory]);
+  }, [appliedSearchKeyword, appliedMinScore, selectedCategory]);
 
   const handleShowMore = () => {
     setVisibleCount(prev => prev + 15);
@@ -154,79 +242,135 @@ function HomeContent() {
     }
   }, [mapCenter, listSortCenter]);
 
+  useEffect(() => {
+    if (!analysisFeedback) {
+      setIsFeedbackFading(false);
+      return;
+    }
+    if (analysisFeedback.type !== "success" || analysisFeedback.message !== "분석이 완료되었습니다.") {
+      setIsFeedbackFading(false);
+      return;
+    }
+
+    const fadeTimer = window.setTimeout(() => setIsFeedbackFading(true), 2000);
+    const hideTimer = window.setTimeout(() => {
+      setAnalysisFeedback(null);
+      setIsFeedbackFading(false);
+    }, 2400);
+
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [analysisFeedback]);
+
   const handleRefreshList = () => {
     setListSortCenter(mapCenter);
+    setAppliedMapBounds(mapBounds);
     setIsListVisible(true);
   };
 
   const handleSearchChange = (val: string) => {
-    setSearchKeyword(val);
+    setInputSearchKeyword(val);
     if (val.trim()) {
       setIsListVisible(true);
     }
   };
 
+  const handleMinScoreChange = (score: number) => {
+    setInputMinScore(score);
+  };
+
+  const handleApplyFilters = () => {
+    setAppliedSearchKeyword(inputSearchKeyword.trim());
+    setAppliedMinScore(inputMinScore);
+    setIsListVisible(true);
+  };
+
   const clearSearch = () => {
-    setSearchKeyword("");
+    setInputSearchKeyword("");
+    setAppliedSearchKeyword("");
     setIsListVisible(false);
   };
 
+  const isInvalidUrl = (value: string) => {
+    try {
+      const parsed = new URL(value.trim());
+      return parsed.protocol !== "http:" && parsed.protocol !== "https:";
+    } catch {
+      return true;
+    }
+  };
+
+  const waitForJobCompletion = useCallback(
+    async (jobId: string): Promise<JobSnapshot | null> => {
+      let lastSnapshot: JobSnapshot | null = null;
+      for (let i = 0; i < 60; i += 1) {
+        const res = await fetch(`${API_BASE_URL}/jobs/${jobId}`);
+        if (!res.ok) break;
+        const snapshot = (await res.json()) as JobSnapshot;
+        lastSnapshot = snapshot;
+        const state = snapshot.state || snapshot.status;
+        if (state === "completed" || state === "failed") return snapshot;
+        await delay(1500);
+      }
+      return lastSnapshot;
+    },
+    [API_BASE_URL]
+  );
+
   const handleAnalyze = async (url: string) => {
     setIsLoading(true);
+    setAnalysisFeedback(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/analyze`, {
+      if (isInvalidUrl(url)) {
+        throw new Error("유효한 URL을 입력해 주세요.");
+      }
+
+      const res = await fetch(`${API_BASE_URL}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Analysis failed");
+        throw new Error(errorData.detail || errorData.message || "작업 생성에 실패했습니다.");
       }
-      const data = await res.json();
-      setSelectedRestaurant(data.restaurant);
+      const job = (await res.json()) as JobCreateResponse;
+      setAnalysisFeedback({
+        type: "success",
+        message: "분석 요청을 접수했습니다. 결과를 가져오는 중입니다.",
+      });
+
+      const snapshot = await waitForJobCompletion(job.job_id);
+      const state = snapshot?.state || snapshot?.status || job.status;
+      if (state === "failed") {
+        throw new Error(snapshot?.error_reason || "분석 처리 중 문제가 발생했습니다.");
+      }
+
+      const refreshed = await fetchRestaurants();
+      const target = refreshed.find((r) => r.id === job.store_id);
+      setSelectedRestaurant(target || fallbackRestaurantFromJob({ storeId: job.store_id, url, snapshot }));
       setIsListVisible(false);
-      fetchRestaurants();
+      setAnalysisFeedback({
+        type: "success",
+        message: state === "completed" ? "분석이 완료되었습니다." : "분석 요청이 접수되었습니다.",
+      });
     } catch (err: any) {
       console.error(err);
-      alert(`분석 중 오류 발생: ${err.message}`);
+      setAnalysisFeedback({
+        type: "error",
+        message: err.message || "분석 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+      });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}`, { method: "DELETE" });
-      if (selectedRestaurant?.id === id) setSelectedRestaurant(null);
-      fetchRestaurants();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setConfirmDeleteId(null);
-    }
-  };
-
-  const handleRefresh = async (id: string) => {
-    setRefreshingId(id);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/restaurants/${id}/refresh`, { method: "POST" });
-      if (!res.ok) throw new Error("Refresh failed");
-      const data = await res.json();
-      if (selectedRestaurant?.id === id) setSelectedRestaurant(data.restaurant);
-      fetchRestaurants();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRefreshingId(null);
-      setConfirmRefreshId(null);
     }
   };
 
   return (
     <main className="relative w-full h-screen overflow-hidden bg-white font-sans text-slate-900 flex flex-col md:flex-row" suppressHydrationWarning>
       {/* Sidebar Area */}
-      <aside className={`order-2 md:order-1 w-full md:w-[400px] bg-slate-50 border-t md:border-t-0 md:border-r border-slate-200 z-20 flex flex-col relative shadow-[0_-10px_30px_rgba(0,0,0,0.05)] md:shadow-none transition-all duration-300 ${isListVisible ? 'h-[50vh] md:h-full' : 'h-0 md:h-full overflow-hidden md:overflow-visible'}`}>
+      <aside className={`order-2 md:order-1 w-full md:w-[400px] bg-slate-50 border-t md:border-t-0 md:border-r border-slate-200 z-20 flex flex-col relative shadow-[0_-10px_30px_rgba(0,0,0,0.05)] md:shadow-none transition-all duration-300 ${isListVisible ? 'h-[52vh] md:h-full' : 'h-0 md:h-full overflow-hidden md:overflow-visible pointer-events-none md:pointer-events-auto'}`}>
         <header className="p-6 bg-white border-b border-slate-100 flex-none z-10 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-black tracking-tight text-slate-900 mb-0.5 font-display uppercase italic text-shadow-sm">HIDDEN SPOT</h1>
@@ -243,11 +387,12 @@ function HomeContent() {
           <div className="space-y-6 py-5">
             <div className="hidden md:block">
               <SearchFilter
-                searchKeyword={searchKeyword}
+                searchKeyword={inputSearchKeyword}
                 onSearchChange={handleSearchChange}
                 onClearSearch={clearSearch}
-                minScore={minScore}
-                onMinScoreChange={setMinScore}
+                minScore={inputMinScore}
+                onMinScoreChange={handleMinScoreChange}
+                onApply={handleApplyFilters}
               />
             </div>
 
@@ -267,9 +412,7 @@ function HomeContent() {
               restaurants={paginatedRestaurants}
               selectedId={selectedRestaurant?.id}
               onSelect={(res) => { setSelectedRestaurant(res); setIsListVisible(false); }}
-              onRefresh={setConfirmRefreshId}
-              onDelete={setConfirmDeleteId}
-              refreshingId={refreshingId}
+              showActions={false}
               isLoading={isLoading}
             />
 
@@ -290,19 +433,22 @@ function HomeContent() {
       </aside>
 
       {/* Map Area */}
-      <section className="order-1 md:order-2 flex-1 relative bg-slate-100 h-[50vh] md:h-full">
+      <section className={`order-1 md:order-2 flex-1 relative bg-slate-100 ${isListVisible ? "h-[48vh]" : "h-[100vh]"} md:h-full`}>
         {/* Mobile Map Search Header */}
-        <div className="md:hidden absolute top-4 left-4 right-4 z-30 pointer-events-none">
+        <div className="md:hidden absolute top-4 left-4 right-20 z-30 pointer-events-none">
           <div className="pointer-events-auto bg-white/90 backdrop-blur-xl border border-slate-200 rounded-2xl shadow-xl flex items-center px-4 h-12 ring-1 ring-black/5">
             <Search className="text-slate-400 mr-3" size={18} />
             <input
               type="text"
               placeholder="맛집 검색..."
               className="flex-1 bg-transparent border-none text-sm focus:outline-none text-slate-900 placeholder:text-slate-400 font-bold"
-              value={searchKeyword}
+              value={inputSearchKeyword}
               onChange={(e) => handleSearchChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleApplyFilters();
+              }}
             />
-            {searchKeyword && (
+            {inputSearchKeyword && (
               <button
                 onClick={clearSearch}
                 className="ml-2 p-1 text-slate-300 hover:text-slate-500"
@@ -310,15 +456,43 @@ function HomeContent() {
                 <X size={16} />
               </button>
             )}
+            <button
+              onClick={handleApplyFilters}
+              className="ml-2 text-[10px] font-black text-slate-700 rounded-md border border-slate-200 px-2 py-1"
+            >
+              조건 적용
+            </button>
+          </div>
+        </div>
+        <div className="md:hidden absolute top-4 right-4 z-30">
+          <div className="rounded-xl bg-white/90 border border-slate-200 p-1 shadow">
+            <button
+              type="button"
+              onClick={() => setIsListVisible(false)}
+              aria-pressed={!isListVisible}
+              className={`px-2 py-1 text-[10px] font-black rounded-md transition-colors ${!isListVisible ? "bg-slate-900 text-white" : "text-slate-500"}`}
+            >
+              MAP
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsListVisible(true)}
+              aria-pressed={isListVisible}
+              className={`ml-1 px-2 py-1 text-[10px] font-black rounded-md transition-colors ${isListVisible ? "bg-slate-900 text-white" : "text-slate-500"}`}
+            >
+              LIST
+            </button>
           </div>
         </div>
 
-        <Map
-          restaurants={restaurants}
+        <NaverMap
+          restaurants={filteredRestaurants}
           selectedId={selectedRestaurant?.id}
           onMarkerClick={(res) => { setSelectedRestaurant(res); setIsListVisible(false); }}
           onMapClick={() => { setSelectedRestaurant(null); setIsListVisible(false); }}
-          onCenterChange={(lat, lng) => setMapCenter({ lat, lng })}
+          onCenterChange={handleCenterChange}
+          onBoundsChange={handleBoundsChange}
+          initialCenter={DEFAULT_MAP_CENTER}
         />
 
         {/* Floating "Search in this area" Button */}
@@ -339,7 +513,11 @@ function HomeContent() {
 
         {/* FABs for Mobile */}
         <div className="md:hidden absolute bottom-6 right-6 z-50 flex flex-col gap-3">
-          <button onClick={() => setIsListVisible(!isListVisible)} className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${isListVisible ? 'bg-orange-500 text-white' : 'bg-white text-slate-600 border'}`}>
+          <button
+            aria-label={isListVisible ? "Hide list view" : "Show list view"}
+            onClick={() => setIsListVisible(!isListVisible)}
+            className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${isListVisible ? 'bg-orange-500 text-white' : 'bg-white text-slate-600 border'}`}
+          >
             <List size={22} />
           </button>
           <Dialog open={isRegisterOpen} onOpenChange={setIsRegisterOpen}>
@@ -375,39 +553,25 @@ function HomeContent() {
         )}
       </section>
 
-      {/* Modals */}
-      <AlertDialog open={!!confirmRefreshId} onOpenChange={() => setConfirmRefreshId(null)}>
-        <AlertDialogContent className="rounded-3xl border-none p-6 bg-white shadow-2xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-xl font-black text-slate-900 uppercase tracking-tight">정보 업데이트</AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-500 font-medium">최신 리뷰를 바탕으로 정보를 다시 분석할까요? <br /><span className="text-orange-600 font-bold mt-1 inline-block">(약 10-20초 소요)</span></AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="mt-4 gap-2">
-            <AlertDialogCancel className="rounded-2xl border-slate-100 bg-slate-50 font-bold text-slate-600 h-12 px-6">취소</AlertDialogCancel>
-            <AlertDialogAction onClick={() => confirmRefreshId && handleRefresh(confirmRefreshId)} className="rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 px-6">분석 시작</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {analysisFeedback && (
+        <div className={`fixed left-3 top-3 z-[130] rounded-xl border bg-white/95 px-3 py-2 shadow-lg transition-opacity duration-400 ${isFeedbackFading ? "opacity-0" : "opacity-100"}`}>
+          <p className={`text-xs font-black ${analysisFeedback.type === "error" ? "text-rose-600" : "text-emerald-600"}`}>
+            {analysisFeedback.type === "error" ? "오류 안내" : "분석 상태"}
+          </p>
+          <p className="text-[11px] font-semibold text-slate-700">{analysisFeedback.message}</p>
+          {analysisFeedback.type === "error" && (
+            <button
+              onClick={() => setAnalysisFeedback(null)}
+              className="mt-2 text-[11px] font-bold text-slate-500 underline"
+            >
+              닫기
+            </button>
+          )}
+        </div>
+      )}
 
-      <AlertDialog open={!!confirmDeleteId} onOpenChange={() => setConfirmDeleteId(null)}>
-        <AlertDialogContent className="rounded-3xl border-none p-6 bg-white shadow-2xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-xl font-black text-slate-900 uppercase tracking-tight">맛집 삭제</AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-500 font-medium">정말 삭제하시겠습니까? <br /><span className="text-red-500 font-bold mt-1 inline-block">데이터는 복구할 수 없습니다.</span></AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="mt-4 gap-2">
-            <AlertDialogCancel className="rounded-2xl border-slate-100 bg-slate-50 font-bold text-slate-600 h-12 px-6">취소</AlertDialogCancel>
-            <AlertDialogAction onClick={() => confirmDeleteId && handleDelete(confirmDeleteId)} className="rounded-2xl bg-red-500 hover:bg-red-600 text-white font-bold h-12 px-6">삭제하기</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </main>
   );
 }
 
-const Home = dynamic(() => Promise.resolve(HomeContent), {
-  ssr: false,
-  loading: () => <div className="min-h-screen bg-slate-50" />,
-});
-
-export default Home;
+export default HomeContent;

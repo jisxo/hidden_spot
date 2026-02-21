@@ -13,6 +13,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://openapi.map.naver.com" crossOrigin="" />
+        <link rel="dns-prefetch" href="//openapi.map.naver.com" />
+      </head>
       <body className="font-sans" suppressHydrationWarning>
         {children}
       </body>
