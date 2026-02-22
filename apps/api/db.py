@@ -530,6 +530,13 @@ class ApiDatabase:
         if len(text) > 42:
             return True
 
+        # Floor/location fragments are frequently extracted from overview sentences,
+        # but they are not store names (e.g. "지하 1층", "2층", "B1").
+        if re.search(r"^(?:지하\s*\d+\s*층?|\d+\s*층|b\d+)$", lowered):
+            return True
+        if re.search(r"^(?:지하|[0-9]+층)\b", text):
+            return True
+
         noise_tokens = (
             "팩트만",
             "전달",
@@ -549,6 +556,8 @@ class ApiDatabase:
             "쾌적",
             "분위기",
             "입장",
+            "지하",
+            "층별",
         )
         token_hits = sum(1 for token in noise_tokens if token in text)
         if token_hits >= 2:
