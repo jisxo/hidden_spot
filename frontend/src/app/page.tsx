@@ -54,6 +54,15 @@ type JobSnapshot = {
   status?: string;
   state?: "queued" | "started" | "completed" | "failed" | string;
   error_reason?: string | null;
+  error_type?: string | null;
+  error_stage?: string | null;
+  evidence_paths?: string[];
+};
+
+type AnalysisFeedback = {
+  type: "success" | "error";
+  message: string;
+  details?: string[];
 };
 
 type MapBounds = {
@@ -102,6 +111,23 @@ function fallbackRestaurantFromJob(params: { storeId: string; url: string; snaps
   };
 }
 
+function toErrorTypeLabel(errorType?: string | null): string {
+  switch (errorType) {
+    case "blocked_suspected":
+      return "차단 의심";
+    case "parse_failed":
+      return "파싱 실패";
+    case "crawl_timeout":
+      return "크롤링 시간 초과";
+    case "llm_failed":
+      return "AI 분석 실패";
+    case "embed_failed":
+      return "임베딩 실패";
+    default:
+      return "처리 실패";
+  }
+}
+
 function HomeContent() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
   const API_BASE_URL = resolveApiBaseUrl();
@@ -120,10 +146,7 @@ function HomeContent() {
   const [listSortCenter, setListSortCenter] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [visibleCount, setVisibleCount] = useState(15);
-  const [analysisFeedback, setAnalysisFeedback] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
+  const [analysisFeedback, setAnalysisFeedback] = useState<AnalysisFeedback | null>(null);
   const [isFeedbackFading, setIsFeedbackFading] = useState(false);
 
   const SMART_CATEGORIES = useMemo(() => [
@@ -357,7 +380,18 @@ function HomeContent() {
       const snapshot = await waitForJobCompletion(job.job_id);
       const state = snapshot?.state || snapshot?.status || job.status;
       if (state === "failed") {
-        throw new Error(snapshot?.error_reason || "분석 처리 중 문제가 발생했습니다.");
+        const typeLabel = toErrorTypeLabel(snapshot?.error_type);
+        const reason = snapshot?.error_reason || "분석 처리 중 문제가 발생했습니다.";
+        const evidence = snapshot?.evidence_paths?.[0];
+        setAnalysisFeedback({
+          type: "error",
+          message: `${typeLabel} (${snapshot?.error_type || "unknown_failed"})`,
+          details: [
+            reason,
+            evidence ? `증거 경로: ${evidence}` : "증거 경로: 없음",
+          ],
+        });
+        return;
       }
 
       const refreshed = await fetchRestaurants();
@@ -372,7 +406,8 @@ function HomeContent() {
       console.error(err);
       setAnalysisFeedback({
         type: "error",
-        message: err.message || "분석 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+        message: "처리 실패",
+        details: [err.message || "분석 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요."],
       });
     } finally {
       setIsLoading(false);
@@ -571,6 +606,11 @@ function HomeContent() {
             {analysisFeedback.type === "error" ? "오류 안내" : "분석 상태"}
           </p>
           <p className="text-[11px] font-semibold text-slate-700">{analysisFeedback.message}</p>
+          {analysisFeedback.details?.map((line, idx) => (
+            <p key={`${line}-${idx}`} className="text-[11px] text-slate-600 break-all">
+              {line}
+            </p>
+          ))}
           {analysisFeedback.type === "error" && (
             <button
               onClick={() => setAnalysisFeedback(null)}

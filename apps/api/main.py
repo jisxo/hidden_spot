@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -39,6 +40,25 @@ def _parse_cors_allow_origins() -> list[str]:
             origins.append(origin)
 
     return origins or [o.rstrip("/") for o in default.split(",")]
+
+
+def _normalize_evidence_paths(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x).strip()]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+        return [text]
+    return []
 
 
 class JobCreateRequest(BaseModel):
@@ -185,6 +205,9 @@ def get_job(job_id: str):
 
     snapshot["queue_status"] = queue_status
     snapshot["state"] = state
+    snapshot["error_type"] = snapshot.get("error_type")
+    snapshot["error_stage"] = snapshot.get("error_stage")
+    snapshot["evidence_paths"] = _normalize_evidence_paths(snapshot.get("evidence_paths_json"))
 
     if state == "completed":
         snapshot["minio_paths"] = [p for p in [snapshot.get("bronze_path"), snapshot.get("silver_path"), snapshot.get("gold_path")] if p]

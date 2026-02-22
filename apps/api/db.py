@@ -71,6 +71,9 @@ class ApiDatabase:
             status TEXT NOT NULL,
             progress INT NOT NULL DEFAULT 0,
             error_reason TEXT,
+            error_type TEXT,
+            error_stage TEXT,
+            evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
@@ -116,6 +119,9 @@ class ApiDatabase:
         ALTER TABLE stores ADD COLUMN IF NOT EXISTS naver_place_id TEXT;
         ALTER TABLE analysis ADD COLUMN IF NOT EXISTS review_summary_json JSONB;
         ALTER TABLE analysis ADD COLUMN IF NOT EXISTS categories_json JSONB;
+        ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_type TEXT;
+        ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_stage TEXT;
+        ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb;
         """
         with self.conn() as conn:
             with conn.cursor() as cur:
@@ -174,12 +180,16 @@ class ApiDatabase:
         silver_path: str | None = None,
         gold_path: str | None = None,
         error_reason: str | None = None,
+        error_type: str | None = None,
+        error_stage: str | None = None,
+        evidence_paths_json: list[str] | None = None,
     ) -> None:
         sql = """
         INSERT INTO store_snapshots (
-            store_id, collected_at, run_id, url, bronze_path, silver_path, gold_path, status, progress, error_reason
+            store_id, collected_at, run_id, url, bronze_path, silver_path, gold_path, status, progress, error_reason,
+            error_type, error_stage, evidence_paths_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb))
         ON CONFLICT (run_id)
         DO UPDATE SET
             store_id = EXCLUDED.store_id,
@@ -191,6 +201,9 @@ class ApiDatabase:
             status = EXCLUDED.status,
             progress = EXCLUDED.progress,
             error_reason = EXCLUDED.error_reason,
+            error_type = EXCLUDED.error_type,
+            error_stage = EXCLUDED.error_stage,
+            evidence_paths_json = EXCLUDED.evidence_paths_json,
             updated_at = NOW();
         """
         with self.conn() as conn:
@@ -208,6 +221,9 @@ class ApiDatabase:
                         status,
                         progress,
                         error_reason,
+                        error_type,
+                        error_stage,
+                        json.dumps(evidence_paths_json) if evidence_paths_json is not None else None,
                     ),
                 )
 

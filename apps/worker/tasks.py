@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 
-from apps.worker.crawler import NaverMapsCrawler
+from apps.worker.crawler import CrawlBlockedError, NaverMapsCrawler
 from apps.worker.db import WorkerDatabase
 from apps.worker.dq import DQError, validate_reviews
 from apps.worker.embeddings import EmbeddingGenerator
@@ -13,6 +13,8 @@ from apps.worker.parser import parse_reviews_html, to_jsonl
 from libs.common import KeyParts, MinioDataLakeClient, sha256_bytes
 from libs.common.object_keys import (
     artifacts_chunk_map,
+    artifacts_debug_blocked_png,
+    artifacts_debug_final_failure_png,
     artifacts_hash_index,
     bronze_reviews_html_gz,
     bronze_store_meta,
@@ -34,12 +36,43 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _classify_failure(stage: str, exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, CrawlBlockedError):
+        return "blocked_suspected", "crawl"
+    if isinstance(exc, DQError) or stage == "parse":
+        return "parse_failed", "parse"
+
+    if stage == "crawl":
+        message = str(exc).lower()
+        if "timeout" in message:
+            return "crawl_timeout", "crawl"
+        return "crawl_failed", "crawl"
+    if stage == "llm":
+        return "llm_failed", "llm"
+    if stage == "embed":
+        return "embed_failed", "embed"
+    return "unknown_failed", stage or "unknown"
+
+
+def _put_debug_screenshot(
+    *,
+    minio: MinioDataLakeClient,
+    key: str,
+    screenshot_bytes: bytes | None,
+) -> str | None:
+    if not screenshot_bytes:
+        return None
+    minio.put_bytes(minio.artifacts_bucket, key, screenshot_bytes, content_type="image/png")
+    return f"s3://{minio.artifacts_bucket}/{key}"
+
+
 def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> dict:
     db = WorkerDatabase()
     minio = MinioDataLakeClient()
 
     collected_at = datetime.fromisoformat(collected_at_iso.replace("Z", "+00:00"))
     parts = KeyParts(store_id=store_id, collected_at_iso=collected_at_iso, run_id=run_id, dt=collected_at.strftime("%Y-%m-%d"))
+    latest_page_screenshot: bytes | None = None
 
     stage = "crawl"
     try:
@@ -48,6 +81,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
 
         crawler = NaverMapsCrawler()
         crawl_result = process_crawl(crawler=crawler, minio=minio, parts=parts, run_id=run_id, url=url)
+        latest_page_screenshot = crawl_result.get("page_screenshot_bytes")
         db.upsert_store(
             store_id=parts.store_id,
             url=url,
@@ -137,13 +171,39 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             "silver_path": parse_result["silver_path"],
             "gold_path": llm_result["gold_path"],
         }
-    except DQError as exc:
-        db.log_event(run_id=run_id, stage="dq", status="failed", duration_ms=0, payload={"error": str(exc)})
-        db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
-        raise
     except Exception as exc:
+        error_type, error_stage = _classify_failure(stage=stage, exc=exc)
+        evidence_paths = list(getattr(exc, "evidence_paths", []) or [])
+        final_failure_source = getattr(exc, "screenshot_bytes", None) or latest_page_screenshot
+        if final_failure_source:
+            try:
+                final_key = artifacts_debug_final_failure_png(parts)
+                final_path = _put_debug_screenshot(
+                    minio=minio,
+                    key=final_key,
+                    screenshot_bytes=final_failure_source,
+                )
+                if final_path and final_path not in evidence_paths:
+                    evidence_paths.append(final_path)
+            except Exception as upload_exc:
+                db.log_event(
+                    run_id=run_id,
+                    stage="debug",
+                    status="failed",
+                    duration_ms=0,
+                    payload={"error": str(upload_exc)},
+                )
+
         db.log_event(run_id=run_id, stage=stage, status="failed", duration_ms=0, payload={"error": str(exc)})
-        db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
+        db.update_snapshot(
+            run_id=run_id,
+            status="failed",
+            progress=100,
+            error_reason=str(exc),
+            error_type=error_type,
+            error_stage=error_stage,
+            evidence_paths_json=evidence_paths,
+        )
         raise
 
 
@@ -151,6 +211,21 @@ def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: 
     crawl_timeout_sec = _env_int("CRAWL_TIMEOUT_SEC", 180)
     try:
         data = asyncio.run(asyncio.wait_for(crawler.crawl(url=url), timeout=crawl_timeout_sec))
+    except CrawlBlockedError as exc:
+        evidence_paths = list(exc.evidence_paths or [])
+        try:
+            blocked_key = artifacts_debug_blocked_png(parts)
+            blocked_path = _put_debug_screenshot(
+                minio=minio,
+                key=blocked_key,
+                screenshot_bytes=exc.screenshot_bytes,
+            )
+            if blocked_path:
+                evidence_paths.append(blocked_path)
+        except Exception:
+            pass
+        exc.evidence_paths = evidence_paths
+        raise
     except asyncio.TimeoutError as exc:
         raise RuntimeError(f"crawl timeout after {crawl_timeout_sec}s") from exc
 
@@ -197,6 +272,7 @@ def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: 
         "naver_place_id": data.get("naver_place_id"),
         "bronze_meta_path": f"s3://{minio.bronze_bucket}/{meta_key}",
         "bronze_html_path": f"s3://{minio.bronze_bucket}/{html_key}",
+        "page_screenshot_bytes": data.get("page_screenshot_bytes"),
     }
 
 

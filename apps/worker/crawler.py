@@ -11,6 +11,34 @@ from urllib.request import Request, urlopen
 from playwright.async_api import async_playwright
 
 
+_BLOCKED_MARKERS = (
+    "비정상적인 접근",
+    "자동화된",
+    "자동화",
+    "captcha",
+    "access denied",
+    "are you human",
+    "unusual traffic",
+    "verify you are human",
+    "로봇이 아닙니다",
+)
+
+
+class CrawlBlockedError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        screenshot_bytes: bytes | None = None,
+        final_url: str | None = None,
+        evidence_paths: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.screenshot_bytes = screenshot_bytes
+        self.final_url = final_url
+        self.evidence_paths = evidence_paths or []
+
+
 class NaverMapsCrawler:
     async def crawl(self, url: str) -> dict[str, Any]:
         retry_count = int(os.getenv("CRAWL_RETRY_COUNT", "2"))
@@ -99,6 +127,25 @@ class NaverMapsCrawler:
             if not name:
                 name = self._extract_title_name(html_main) or self._extract_title_name(html) or place_id
 
+            blocked_reason = self._detect_blocked_reason(
+                final_url=current_url,
+                html_main=html_main,
+                html=html,
+                name=name,
+                reviews=reviews,
+            )
+            if blocked_reason:
+                screenshot = await self._safe_screenshot(page)
+                await context.close()
+                await browser.close()
+                raise CrawlBlockedError(
+                    blocked_reason,
+                    screenshot_bytes=screenshot,
+                    final_url=current_url,
+                )
+
+            page_screenshot_bytes = await self._safe_screenshot(page)
+
             await context.close()
             await browser.close()
 
@@ -113,6 +160,7 @@ class NaverMapsCrawler:
                 "review_count": len(reviews),
                 "reviews": reviews,
                 "raw_html": html,
+                "page_screenshot_bytes": page_screenshot_bytes,
             }
 
     def _resolve_source_url(self, url: str) -> str:
@@ -439,6 +487,32 @@ class NaverMapsCrawler:
             seen.add(value)
             dedup.append(value)
         return dedup
+
+    def _detect_blocked_reason(
+        self,
+        *,
+        final_url: str,
+        html_main: str,
+        html: str,
+        name: str,
+        reviews: list[str],
+    ) -> str | None:
+        # Block pages are usually shell-like and fail to expose place name/reviews.
+        weak_extraction = (not name) or len(reviews) < 3
+        if not weak_extraction:
+            return None
+
+        combined = f"{final_url}\n{html_main}\n{html}".lower()
+        for marker in _BLOCKED_MARKERS:
+            if marker.lower() in combined:
+                return f"blocked suspected: marker={marker}"
+        return None
+
+    async def _safe_screenshot(self, page) -> bytes | None:
+        try:
+            return await page.screenshot(full_page=True, type="png")
+        except Exception:
+            return None
 
     def _extract_place_id(self, url: str) -> str | None:
         match = re.search(r"/(?:entry/)?place/([A-Za-z0-9_-]+)", url)

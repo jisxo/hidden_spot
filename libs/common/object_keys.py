@@ -47,3 +47,13 @@ def artifacts_chunk_map(parts: KeyParts) -> str:
 
 def artifacts_hash_index(content_hash: str) -> str:
     return f"artifacts/hash_index/bronze_reviews/{content_hash}.json"
+
+
+def artifacts_debug_blocked_png(parts: KeyParts) -> str:
+    _require(parts)
+    return f"artifacts/debug/store_id={parts.store_id}/dt={parts.dt}/run_id={parts.run_id}/blocked_suspected.png"
+
+
+def artifacts_debug_final_failure_png(parts: KeyParts) -> str:
+    _require(parts)
+    return f"artifacts/debug/store_id={parts.store_id}/dt={parts.dt}/run_id={parts.run_id}/final_failure.png"

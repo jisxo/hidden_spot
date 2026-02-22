@@ -33,6 +33,9 @@ class WorkerDatabase:
         silver_path: str | None = None,
         gold_path: str | None = None,
         error_reason: str | None = None,
+        error_type: str | None = None,
+        error_stage: str | None = None,
+        evidence_paths_json: list[str] | None = None,
     ) -> None:
         sql = """
         UPDATE store_snapshots
@@ -42,12 +45,29 @@ class WorkerDatabase:
             silver_path=COALESCE(%s, silver_path),
             gold_path=COALESCE(%s, gold_path),
             error_reason=%s,
+            error_type=%s,
+            error_stage=%s,
+            evidence_paths_json=COALESCE(%s::jsonb, '[]'::jsonb),
             updated_at=NOW()
         WHERE run_id=%s;
         """
         with self.conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (status, progress, bronze_path, silver_path, gold_path, error_reason, run_id))
+                cur.execute(
+                    sql,
+                    (
+                        status,
+                        progress,
+                        bronze_path,
+                        silver_path,
+                        gold_path,
+                        error_reason,
+                        error_type,
+                        error_stage,
+                        json.dumps(evidence_paths_json) if evidence_paths_json is not None else None,
+                        run_id,
+                    ),
+                )
 
     def get_snapshot(self, run_id: str):
         with self.conn() as conn:
@@ -76,6 +96,11 @@ class WorkerDatabase:
             IF to_regclass('public.analysis') IS NOT NULL THEN
                 ALTER TABLE analysis ADD COLUMN IF NOT EXISTS review_summary_json JSONB;
                 ALTER TABLE analysis ADD COLUMN IF NOT EXISTS categories_json JSONB;
+            END IF;
+            IF to_regclass('public.store_snapshots') IS NOT NULL THEN
+                ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_type TEXT;
+                ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_stage TEXT;
+                ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb;
             END IF;
         END $$;
         """
