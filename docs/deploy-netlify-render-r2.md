@@ -41,6 +41,9 @@ This guide follows the stable setup:
 - `REDIS_URL=<render-keyvalue-internal-url>`
 - `RQ_QUEUE=hidden_spot`
 - `RQ_JOB_TIMEOUT_SEC=900`
+- `AUTO_BACKFILL_FROM_GOLD_ON_EMPTY=true`
+- `BACKFILL_COOLDOWN_SEC=300`
+- `BACKFILL_MAX_ITEMS=0`
 - `CORS_ALLOW_ORIGINS=https://<your-netlify-site>.netlify.app,http://localhost:3000`
 
 ### Worker service (`apps/worker`)
@@ -117,6 +120,12 @@ python scripts/backfill_serving_from_minio.py
 
 If `gold_keys` is `0`, there is no gold object to backfill yet.  
 In that case, run at least one successful `/jobs` execution first.
+
+You can also trigger backfill via API:
+
+```bash
+curl -X POST "https://<render-api-domain>/admin/backfill?max_items=0"
+```
 
 ## 7) Optional stabilization
 

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from redis import Redis
 from rq import Queue, Retry
 from rq.job import Job
 
+from apps.api.backfill import backfill_serving_from_gold
 from apps.api.db import ApiDatabase
 from apps.api.search import expand_query
 from apps.api.store_id import derive_store_id
@@ -96,6 +98,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 _db = ApiDatabase()
+_backfill_lock = Lock()
+_last_backfill_attempt_at = 0.0
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name, "true" if default else "false") or "").strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _queue() -> Queue:
@@ -239,7 +252,38 @@ def health_check():
 # Frontend compatibility endpoints (`frontend/src/app/page.tsx` uses /api/v1/restaurants*).
 @app.get("/api/v1/restaurants")
 def list_restaurants(min_score: int = Query(0, ge=0, le=100), keyword: str | None = None):
+    rows = _db.list_restaurants(min_score=min_score, keyword=keyword)
+    if rows:
+        return rows
+
+    if not _env_bool("AUTO_BACKFILL_FROM_GOLD_ON_EMPTY", True):
+        return rows
+
+    global _last_backfill_attempt_at
+    now = time.time()
+    cooldown_sec = _env_int("BACKFILL_COOLDOWN_SEC", 300)
+    if now - _last_backfill_attempt_at < cooldown_sec:
+        return rows
+
+    with _backfill_lock:
+        # Another request may have already backfilled before lock acquisition.
+        rows = _db.list_restaurants(min_score=min_score, keyword=keyword)
+        if rows:
+            return rows
+        _last_backfill_attempt_at = now
+        max_items = _env_int("BACKFILL_MAX_ITEMS", 0)
+        try:
+            backfill_serving_from_gold(db=_db, max_items=max_items)
+        except Exception:
+            return rows
+
     return _db.list_restaurants(min_score=min_score, keyword=keyword)
+
+
+@app.post("/admin/backfill")
+def manual_backfill(max_items: int = Query(0, ge=0, le=100000)):
+    result = backfill_serving_from_gold(db=_db, max_items=max_items)
+    return result
 
 
 @app.post("/api/v1/restaurants/analyze")
