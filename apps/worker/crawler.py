@@ -1,7 +1,9 @@
 import asyncio
+import json
 import os
 import random
 import re
+from html import unescape
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -46,7 +48,8 @@ class NaverMapsCrawler:
             current_url = page.url
             place_id = self._extract_place_id(current_url)
 
-            html = await page.content()
+            html_main = await page.content()
+            html = html_main
 
             name = ""
             address = ""
@@ -54,21 +57,47 @@ class NaverMapsCrawler:
             latitude: float | None = None
             longitude: float | None = None
 
-            try:
-                iframe_el = await page.wait_for_selector("#entryIframe", timeout=10000)
-                frame = await iframe_el.content_frame()
-                if frame:
-                    name = await self._first_text(frame, ["span.GHAhO", "span.Fc7rM", "h1", "h2"])
-                    address = await self._first_text(frame, ["span.pz7wy", "span.LDkhd", "span.yx8vA", "span.addr"])
-                    reviews = await self._extract_reviews(frame)
-                    # Prefer place iframe content over outer map shell HTML.
+            frame = await self._get_entry_frame(page=page, retries=3, retry_delay_ms=700)
+            if frame:
+                try:
+                    name, address = await self._extract_name_address_with_retry(
+                        frame=frame, retries=3, retry_delay_ms=450
+                    )
+                    reviews = await self._extract_reviews_with_retry(frame=frame, retries=3)
                     html = await frame.content()
                     latitude, longitude = await self._extract_coordinates(page=page, frame=frame)
-            except Exception:
-                pass
+                except Exception:
+                    pass
+
+            html_name, html_address = self._extract_name_address_from_html(html)
+            if not name:
+                name = html_name
+            if not address:
+                address = html_address
+
+            if latitude is None or longitude is None:
+                lat_guess, lng_guess = self._extract_coordinates_from_text(f"{html_main}\n{html}")
+                latitude = latitude if latitude is not None else lat_guess
+                longitude = longitude if longitude is not None else lng_guess
 
             if not place_id:
                 place_id = self._extract_place_id(url) or ""
+
+            # Fallback route: if iframe extraction is weak, use mobile place pages.
+            if place_id and (not name or len(reviews) < 3):
+                mobile = await self._crawl_mobile_fallback(context=context, place_id=place_id, delay_ms=delay_ms)
+                if mobile:
+                    name = name or mobile.get("name", "")
+                    address = address or mobile.get("address", "")
+                    latitude = latitude if latitude is not None else mobile.get("latitude")
+                    longitude = longitude if longitude is not None else mobile.get("longitude")
+                    reviews = self._dedupe_texts([*reviews, *mobile.get("reviews", [])])[:500]
+                    mobile_html = mobile.get("raw_html", "")
+                    if mobile_html:
+                        html = mobile_html
+
+            if not name:
+                name = self._extract_title_name(html_main) or self._extract_title_name(html) or place_id
 
             await context.close()
             await browser.close()
@@ -116,6 +145,55 @@ class NaverMapsCrawler:
 
         return candidate
 
+    async def _get_entry_frame(self, page, retries: int, retry_delay_ms: int):
+        for _ in range(max(1, retries)):
+            try:
+                iframe_el = await page.query_selector("#entryIframe")
+                if iframe_el:
+                    frame = await iframe_el.content_frame()
+                    if frame:
+                        return frame
+            except Exception:
+                pass
+            await asyncio.sleep(retry_delay_ms / 1000.0)
+        return None
+
+    async def _extract_name_address_with_retry(self, frame, retries: int, retry_delay_ms: int) -> tuple[str, str]:
+        name = ""
+        address = ""
+        for _ in range(max(1, retries)):
+            if not name:
+                name = await self._first_text(frame, ["span.GHAhO", "span.Fc7rM", "h1", "h2", "[data-testid='place-title']"])
+            if not address:
+                address = await self._first_text(
+                    frame,
+                    [
+                        "span.pz7wy",
+                        "span.LDkhd",
+                        "span.yx8vA",
+                        "span.addr",
+                        "[data-testid='address']",
+                    ],
+                )
+            if name and address:
+                break
+            try:
+                await frame.evaluate("window.scrollBy(0, 400)")
+            except Exception:
+                pass
+            await asyncio.sleep(retry_delay_ms / 1000.0)
+        return name.strip(), address.strip()
+
+    async def _extract_reviews_with_retry(self, frame, retries: int) -> list[str]:
+        merged: list[str] = []
+        for idx in range(max(1, retries)):
+            blocks = await self._extract_reviews(frame, scroll_rounds=8 + idx * 4)
+            merged.extend(blocks)
+            merged = self._dedupe_texts(merged)
+            if len(merged) >= 20:
+                break
+        return merged[:500]
+
     async def _first_text(self, frame, selectors: list[str]) -> str:
         for selector in selectors:
             loc = frame.locator(selector).first
@@ -125,7 +203,7 @@ class NaverMapsCrawler:
                     return text
         return ""
 
-    async def _extract_reviews(self, frame) -> list[str]:
+    async def _extract_reviews(self, frame, scroll_rounds: int = 8) -> list[str]:
         try:
             tabs = frame.get_by_text(re.compile(r"리뷰|방문자리뷰|Visitor Reviews"), exact=False)
             if await tabs.count() > 0:
@@ -134,25 +212,28 @@ class NaverMapsCrawler:
         except Exception:
             pass
 
-        for _ in range(8):
+        for _ in range(max(1, scroll_rounds)):
             try:
                 await frame.evaluate("window.scrollBy(0, 1800)")
             except Exception:
                 pass
             await asyncio.sleep(0.5)
 
-        blocks: list[str] = await frame.evaluate(
-            """() => {
-            const list = [];
-            const nodes = Array.from(document.querySelectorAll('li'));
-            for (const node of nodes) {
-              const t = (node.innerText || '').trim();
-              if (!t || t.length < 20) continue;
-              list.push(t);
-            }
-            return list.slice(0, 300);
-            }"""
-        )
+        try:
+            blocks: list[str] = await frame.evaluate(
+                """() => {
+                const list = [];
+                const nodes = Array.from(document.querySelectorAll('li'));
+                for (const node of nodes) {
+                  const t = (node.innerText || '').trim();
+                  if (!t || t.length < 20) continue;
+                  list.push(t);
+                }
+                return list.slice(0, 300);
+                }"""
+            )
+        except Exception:
+            return []
 
         cleaned: list[str] = []
         for block in blocks:
@@ -160,8 +241,7 @@ class NaverMapsCrawler:
             if text:
                 cleaned.append(text)
 
-        dedup = list(dict.fromkeys(cleaned))
-        return dedup[:500]
+        return self._dedupe_texts(cleaned)[:500]
 
     def _clean_review_block(self, raw: str) -> str:
         text = raw.replace("\r", "\n")
@@ -208,8 +288,163 @@ class NaverMapsCrawler:
             return ""
         return merged
 
+    async def _crawl_mobile_fallback(self, context, place_id: str, delay_ms: int) -> dict[str, Any]:
+        page = await context.new_page()
+        try:
+            home_url = f"https://m.place.naver.com/restaurant/{place_id}/home"
+            await page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(delay_ms / 1000.0 + random.uniform(0.2, 0.8))
+            home_html = await page.content()
+
+            name, address = self._extract_name_address_from_html(home_html)
+            lat, lng = self._extract_coordinates_from_text(home_html)
+
+            review_url = f"https://m.place.naver.com/restaurant/{place_id}/review/visitor"
+            await page.goto(review_url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(1.0)
+            for _ in range(8):
+                try:
+                    await page.evaluate("window.scrollBy(0, 1800)")
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)
+
+            blocks: list[str] = await page.evaluate(
+                """() => {
+                const list = [];
+                const nodes = Array.from(document.querySelectorAll('li, div'));
+                for (const node of nodes) {
+                  const t = (node.innerText || '').trim();
+                  if (!t || t.length < 20) continue;
+                  list.push(t);
+                }
+                return list.slice(0, 400);
+                }"""
+            )
+            cleaned_reviews = [self._clean_review_block(block) for block in blocks]
+            reviews = self._dedupe_texts([x for x in cleaned_reviews if x])[:500]
+
+            review_html = await page.content()
+            if not name or not address:
+                r_name, r_addr = self._extract_name_address_from_html(review_html)
+                name = name or r_name
+                address = address or r_addr
+            if lat is None or lng is None:
+                lat2, lng2 = self._extract_coordinates_from_text(review_html)
+                lat = lat if lat is not None else lat2
+                lng = lng if lng is not None else lng2
+
+            return {
+                "name": name,
+                "address": address,
+                "latitude": lat,
+                "longitude": lng,
+                "reviews": reviews,
+                "raw_html": review_html or home_html,
+            }
+        except Exception:
+            return {}
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+    def _extract_name_address_from_html(self, html: str) -> tuple[str, str]:
+        if not html:
+            return "", ""
+        name = ""
+        address = ""
+
+        for key in ["businessName", "name", "title", "placeName"]:
+            value = self._extract_json_string(html, key)
+            if self._looks_like_place_name(value):
+                name = value
+                break
+
+        for key in ["roadAddress", "address", "jibunAddress"]:
+            value = self._extract_json_string(html, key)
+            if value and self._looks_like_address(value):
+                address = value
+                break
+
+        if not name:
+            name = self._extract_title_name(html)
+        return name, address
+
+    def _extract_coordinates_from_text(self, text: str) -> tuple[float | None, float | None]:
+        if not text:
+            return None, None
+
+        lat_match = (
+            re.search(r'"y"\s*:\s*"?(-?[\d.]+)"?', text)
+            or re.search(r'"lat(?:itude)?"\s*:\s*"?(-?[\d.]+)"?', text)
+            or re.search(r'"mapy"\s*:\s*"?(-?[\d.]+)"?', text)
+        )
+        lng_match = (
+            re.search(r'"x"\s*:\s*"?(-?[\d.]+)"?', text)
+            or re.search(r'"(?:lng|longitude)"\s*:\s*"?(-?[\d.]+)"?', text)
+            or re.search(r'"mapx"\s*:\s*"?(-?[\d.]+)"?', text)
+        )
+
+        if not lat_match or not lng_match:
+            return None, None
+        try:
+            return float(lat_match.group(1)), float(lng_match.group(1))
+        except Exception:
+            return None, None
+
+    def _extract_json_string(self, text: str, key: str) -> str:
+        pattern = rf'"{re.escape(key)}"\s*:\s*"((?:[^"\\]|\\.)*)"'
+        match = re.search(pattern, text)
+        if not match:
+            return ""
+        raw = match.group(1)
+        try:
+            value = json.loads(f'"{raw}"')
+        except Exception:
+            value = unescape(raw).replace("\\n", " ")
+        return re.sub(r"\s+", " ", str(value)).strip()
+
+    def _extract_title_name(self, html: str) -> str:
+        match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        title = re.sub(r"\s+", " ", unescape(match.group(1))).strip()
+        title = re.sub(r"\s*[:\-|]\s*네이버.*$", "", title).strip()
+        return title if self._looks_like_place_name(title) else ""
+
+    def _looks_like_place_name(self, text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        if any(marker in lowered for marker in ["naver", "네이버 지도", "localhost"]):
+            return False
+        if len(text) > 80:
+            return False
+        return len(text.strip()) >= 2
+
+    def _looks_like_address(self, text: str) -> bool:
+        if not text:
+            return False
+        return any(token in text for token in ["시", "군", "구", "로", "길", "동", "읍", "면"])
+
+    def _dedupe_texts(self, texts: list[str]) -> list[str]:
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for item in texts:
+            value = re.sub(r"\s+", " ", (item or "")).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            dedup.append(value)
+        return dedup
+
     def _extract_place_id(self, url: str) -> str | None:
         match = re.search(r"/(?:entry/)?place/([A-Za-z0-9_-]+)", url)
+        if match:
+            return match.group(1)
+        match = re.search(r"/restaurant/([A-Za-z0-9_-]+)", url)
         if match:
             return match.group(1)
         return None
