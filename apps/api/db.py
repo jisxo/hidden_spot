@@ -385,9 +385,23 @@ class ApiDatabase:
             FROM analysis a
             JOIN stores s ON s.store_id = a.store_id
             ORDER BY a.store_id, a.updated_at DESC
+        ),
+        by_place AS (
+            SELECT DISTINCT ON (COALESCE(NULLIF(naver_place_id, ''), store_id))
+                *
+            FROM latest
+            ORDER BY
+                COALESCE(NULLIF(naver_place_id, ''), store_id),
+                CASE
+                    WHEN COALESCE(name, '') = '' THEN 1
+                    WHEN lower(COALESCE(name, '')) = lower(COALESCE(store_id, '')) THEN 1
+                    WHEN lower(COALESCE(name, '')) = lower(COALESCE(naver_place_id, '')) THEN 1
+                    ELSE 0
+                END,
+                updated_at DESC
         )
         SELECT *
-        FROM latest
+        FROM by_place
         WHERE score >= %s
           AND (
             %s IS NULL
@@ -504,29 +518,92 @@ class ApiDatabase:
             return True
         return False
 
+    def _looks_like_noise_name(self, name: str) -> bool:
+        text = (name or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+
+        if any(marker in lowered for marker in ("http://", "https://", "관련 링크", "에서 보기")):
+            return True
+
+        if len(text) > 42:
+            return True
+
+        noise_tokens = (
+            "팩트만",
+            "전달",
+            "판단",
+            "방문",
+            "예약",
+            "대기 시간",
+            "데이트",
+            "연인",
+            "배우자",
+            "리뷰",
+            "강추",
+            "추천",
+            "좋았",
+            "맛있",
+            "친절",
+            "쾌적",
+            "분위기",
+            "입장",
+        )
+        token_hits = sum(1 for token in noise_tokens if token in text)
+        if token_hits >= 2:
+            return True
+
+        if len(text.split()) >= 4 and token_hits >= 1:
+            return True
+
+        return False
+
+    def _clean_candidate_name(self, text: str) -> str:
+        candidate = re.sub(r"\s+", " ", text).strip()
+        candidate = candidate.strip("[](){}<>\"'`|:;,./")
+        return candidate
+
     def _infer_name_from_reviews(self, reviews: list[Any], *, store_id: str, naver_place_id: str) -> str:
+        scores: dict[str, int] = {}
+
+        def add_candidate(raw: str, weight: int) -> None:
+            candidate = self._clean_candidate_name(raw)
+            if len(candidate) < 2 or len(candidate) > 40:
+                return
+            if self._looks_like_identifier_name(candidate, store_id=store_id, naver_place_id=naver_place_id):
+                return
+            if self._looks_like_noise_name(candidate):
+                return
+            scores[candidate] = scores.get(candidate, 0) + weight
+
         for item in reviews[:30]:
-            text = str(item or "").strip()
+            text = re.sub(r"\s+", " ", str(item or "")).strip()
             if not text:
                 continue
-            candidate = ""
-            # Common pattern from Naver place overview blocks.
-            m = re.search(r"^(.{2,40}?)\s+(한식|카페|중식|일식|양식|분식|고기집|음식점)\b", text)
+
+            # Naver overview style: "<name> 한식 방문자 리뷰 ..."
+            m = re.search(
+                r"^(.{2,40}?)\s+(한식|카페|중식|일식|양식|분식|고기집|음식점|주점|술집|브런치|베이커리|방문자 리뷰)\b",
+                text,
+            )
             if m:
-                candidate = m.group(1).strip()
-            # Generic "XXX 은/는 ..." intro line from generated summaries.
-            if not candidate:
-                m = re.search(r"^(.{2,40}?)(?:은|는)\s", text)
-                if m:
-                    candidate = m.group(1).strip()
-            if not candidate:
-                continue
-            if self._looks_like_identifier_name(candidate, store_id=store_id, naver_place_id=naver_place_id):
-                continue
-            if any(marker in candidate.lower() for marker in ["관련 링크", "에서 보기", "http://", "https://"]):
-                continue
-            return candidate
-        return ""
+                add_candidate(m.group(1), 6)
+
+            # Summary style: "<name>은/는 ..."
+            m = re.search(r"^(.{2,40}?)(?:은|는)\s", text)
+            if m:
+                add_candidate(m.group(1), 4)
+
+            # Reservation style inside review: "<name> 예약 ..."
+            m = re.search(r"([가-힣A-Za-z0-9][가-힣A-Za-z0-9&()'`·\- ]{1,38}?)\s+예약\b", text)
+            if m:
+                add_candidate(m.group(1), 3)
+
+        if not scores:
+            return ""
+        # Highest score first, then shorter candidate.
+        return sorted(scores.items(), key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
 
     def _to_restaurant_shape(self, row):
         store_id = str(row.get("store_id") or "").strip()
@@ -566,7 +643,7 @@ class ApiDatabase:
 
         naver_place_id = str(row.get("naver_place_id") or legacy.get("naver_place_id") or row.get("store_id") or "").strip()
         name = str(row.get("name") or legacy.get("name") or "").strip()
-        if self._looks_like_identifier_name(name, store_id=store_id, naver_place_id=naver_place_id):
+        if self._looks_like_identifier_name(name, store_id=store_id, naver_place_id=naver_place_id) or self._looks_like_noise_name(name):
             name = ""
         if not name:
             name = self._infer_name_from_reviews(merged_reviews, store_id=store_id, naver_place_id=naver_place_id)
