@@ -104,6 +104,20 @@ Naver Cloud Platform -> Web Service URL(Referer) allowlist:
 4. Verify worker logs show crawl/parse/llm stages.
 5. Verify R2 buckets receive bronze/silver/gold/artifacts objects.
 
+## 6.5) Backfill serving DB from existing R2 gold objects
+
+Use this when R2 has data but `api/v1/restaurants` is empty.
+
+Run in a shell where Python deps are installed (for example API service shell):
+
+```bash
+python scripts/backfill_serving_from_minio.py --dry-run
+python scripts/backfill_serving_from_minio.py
+```
+
+If `gold_keys` is `0`, there is no gold object to backfill yet.  
+In that case, run at least one successful `/jobs` execution first.
+
 ## 7) Optional stabilization
 
 - If API cold starts are annoying on Free plan, move API to Starter.

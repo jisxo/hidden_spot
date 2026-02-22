@@ -11,6 +11,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from libs.common import KeyParts, MinioDataLakeClient
 from libs.common.object_keys import (
     artifacts_chunk_map,

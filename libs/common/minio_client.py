@@ -6,21 +6,46 @@ from typing import Any
 
 from minio import Minio
 from minio.error import S3Error
+import urllib3
 
 
 class MinioDataLakeClient:
     def __init__(self) -> None:
-        endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+        endpoint_raw = (os.getenv("MINIO_ENDPOINT", "localhost:9000") or "").strip()
+        endpoint, scheme = self._normalize_endpoint(endpoint_raw)
         access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
         secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
         secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+        if scheme == "https":
+            secure = True
 
         self.bronze_bucket = os.getenv("MINIO_BUCKET_BRONZE", "hidden-spot-bronze")
         self.silver_bucket = os.getenv("MINIO_BUCKET_SILVER", "hidden-spot-silver")
         self.gold_bucket = os.getenv("MINIO_BUCKET_GOLD", "hidden-spot-gold")
         self.artifacts_bucket = os.getenv("MINIO_BUCKET_ARTIFACTS", "hidden-spot-artifacts")
 
-        self.client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        http_client = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=5.0, read=20.0),
+            retries=urllib3.Retry(total=1, backoff_factor=0.2),
+        )
+        self.client = Minio(
+            endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            secure=secure,
+            http_client=http_client,
+        )
+
+    def _normalize_endpoint(self, endpoint_raw: str) -> tuple[str, str]:
+        if not endpoint_raw:
+            return "localhost:9000", ""
+        if endpoint_raw.startswith("https://"):
+            host = endpoint_raw[len("https://") :]
+            return (host.split("/", 1)[0] or "localhost:9000"), "https"
+        if endpoint_raw.startswith("http://"):
+            host = endpoint_raw[len("http://") :]
+            return (host.split("/", 1)[0] or "localhost:9000"), "http"
+        return (endpoint_raw.split("/", 1)[0] or "localhost:9000"), ""
 
     def put_bytes(self, bucket: str, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         self.client.put_object(bucket, key, io.BytesIO(data), len(data), content_type=content_type)

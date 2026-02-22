@@ -3,6 +3,8 @@ import os
 import random
 import re
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from playwright.async_api import async_playwright
 
@@ -11,11 +13,12 @@ class NaverMapsCrawler:
     async def crawl(self, url: str) -> dict[str, Any]:
         retry_count = int(os.getenv("CRAWL_RETRY_COUNT", "2"))
         delay_ms = int(os.getenv("CRAWL_DELAY_MS", "1200"))
+        target_url = self._resolve_source_url(url)
         last_error: Exception | None = None
 
         for attempt in range(retry_count + 1):
             try:
-                return await self._crawl_once(url=url, delay_ms=delay_ms)
+                return await self._crawl_once(url=target_url, source_url=url, delay_ms=delay_ms)
             except Exception as exc:
                 last_error = exc
                 if attempt >= retry_count:
@@ -24,7 +27,7 @@ class NaverMapsCrawler:
 
         raise RuntimeError(f"crawl failed after retry: {last_error}")
 
-    async def _crawl_once(self, url: str, delay_ms: int) -> dict[str, Any]:
+    async def _crawl_once(self, url: str, source_url: str, delay_ms: int) -> dict[str, Any]:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=os.getenv("PLAYWRIGHT_HEADLESS", "true") == "true")
             context = await browser.new_context(
@@ -34,6 +37,7 @@ class NaverMapsCrawler:
                 ),
                 viewport={"width": 1280, "height": 900},
             )
+            context.set_default_timeout(20000)
             page = await context.new_page()
 
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -70,7 +74,7 @@ class NaverMapsCrawler:
             await browser.close()
 
             return {
-                "source_url": url,
+                "source_url": source_url,
                 "final_url": current_url,
                 "naver_place_id": place_id,
                 "name": name,
@@ -81,6 +85,36 @@ class NaverMapsCrawler:
                 "reviews": reviews,
                 "raw_html": html,
             }
+
+    def _resolve_source_url(self, url: str) -> str:
+        candidate = (url or "").strip()
+        if not candidate:
+            return url
+
+        parsed = urlparse(candidate)
+        host = parsed.netloc.lower()
+
+        # naver.me short links frequently redirect to map entry URLs.
+        if host.endswith("naver.me"):
+            try:
+                req = Request(
+                    candidate,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                        )
+                    },
+                    method="GET",
+                )
+                with urlopen(req, timeout=15) as resp:
+                    resolved = (resp.geturl() or "").strip()
+                if resolved:
+                    return resolved
+            except Exception:
+                return candidate
+
+        return candidate
 
     async def _first_text(self, frame, selectors: list[str]) -> str:
         for selector in selectors:

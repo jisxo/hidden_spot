@@ -2,7 +2,13 @@
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from apps.api.db import ApiDatabase
 from libs.common import MinioDataLakeClient
@@ -104,6 +110,7 @@ def main() -> int:
         "failures": failures,
         "dry_run": args.dry_run,
         "database_url_set": bool(os.getenv("DATABASE_URL")),
+        "hint": "No gold objects found. Run at least one successful job first." if len(gold_keys) == 0 else "",
     }
     print(json.dumps(result, ensure_ascii=False))
     return 0 if failures == 0 else 1
