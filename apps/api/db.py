@@ -626,6 +626,13 @@ class ApiDatabase:
             text = re.sub(r"\s+", " ", str(item or "")).strip()
             if not text:
                 continue
+            # Skip nearby-place recommendation lines from map pages:
+            # "<상호명> 카페,디저트성동구 ... 이 장소에서 190m"
+            if (
+                "이 장소에서" in text
+                or re.search(r"(카페,디저트|한식|중식|일식|양식|분식|요리주점|육류,고기요리)", text)
+            ):
+                continue
 
             # Naver overview style: "<name> 한식 방문자 리뷰 ..."
             m = re.search(
