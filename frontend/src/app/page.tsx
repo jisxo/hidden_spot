@@ -87,30 +87,6 @@ function resolveApiBaseUrl(): string {
   return `https://${normalized}`;
 }
 
-function fallbackRestaurantFromJob(params: { storeId: string; url: string; snapshot?: JobSnapshot | null }) {
-  return {
-    id: params.storeId,
-    naver_place_id: params.storeId,
-    name: params.storeId,
-    address: "",
-    latitude: 37.5665,
-    longitude: 126.978,
-    ai_score: 0,
-    transport_info: "",
-    must_eat_menus: [],
-    search_tags: [],
-    original_url: params.url,
-    summary_json: {
-      tags: [],
-      one_line_copy: "",
-      pro_tips: [],
-      taste_profile: { category_name: params.snapshot?.state || "processing", metrics: [] },
-      negative_points: [],
-    },
-    raw_reviews: [],
-  };
-}
-
 function toErrorTypeLabel(errorType?: string | null): string {
   switch (errorType) {
     case "blocked_suspected":
@@ -394,13 +370,24 @@ function HomeContent() {
         return;
       }
 
+      if (state !== "completed") {
+        setAnalysisFeedback({
+          type: "success",
+          message: "분석 요청이 접수되었습니다. 처리 완료 후 리스트에 반영됩니다.",
+          details: [`run_id: ${job.run_id}`],
+        });
+        return;
+      }
+
       const refreshed = await fetchRestaurants();
       const target = refreshed.find((r) => r.id === job.store_id);
-      setSelectedRestaurant(target || fallbackRestaurantFromJob({ storeId: job.store_id, url, snapshot }));
+      if (target) {
+        setSelectedRestaurant(target);
+      }
       setIsListVisible(false);
       setAnalysisFeedback({
         type: "success",
-        message: state === "completed" ? "분석이 완료되었습니다." : "분석 요청이 접수되었습니다.",
+        message: "분석이 완료되었습니다.",
       });
     } catch (err: any) {
       console.error(err);
