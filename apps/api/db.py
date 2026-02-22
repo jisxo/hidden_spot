@@ -10,6 +10,36 @@ import psycopg2.extras
 
 
 class ApiDatabase:
+    _MANUAL_TASTE_PROFILE_OVERRIDES: dict[str, dict[str, Any]] = {
+        # 뼈탄집 성수역점: default "실사용 기반 후기 혼합" 템플릿 대신
+        # 실제 리뷰 맥락을 반영한 동적 맛 분석으로 보정.
+        "1928780548": {
+            "category_name": "직원 그릴링 기반 숙성 삼겹 전문점",
+            "metrics": [
+                {
+                    "label": "고기 익힘 완성도",
+                    "text": "직원 그릴링 비중이 높아 두툼한 숙성 삼겹의 육즙과 식감이 안정적으로 유지됩니다.",
+                    "score": 5,
+                },
+                {
+                    "label": "곁들임 조합력",
+                    "text": "백김치·명이나물·고추절임 등 곁들임 반찬이 기름진 풍미를 균형감 있게 정리해 줍니다.",
+                    "score": 5,
+                },
+                {
+                    "label": "공간/서비스 만족도",
+                    "text": "청결한 매장과 친절한 응대 언급이 많고, 데이트·모임 모두 무난하다는 평가가 반복됩니다.",
+                    "score": 4,
+                },
+                {
+                    "label": "재방문 가능성",
+                    "text": "재방문과 추천 의도가 높게 나타나며, 피크 시간대에는 예약 방문 시 체감 만족도가 더 높습니다.",
+                    "score": 4,
+                },
+            ],
+        }
+    }
+
     def __init__(self) -> None:
         self.database_url = os.getenv("DATABASE_URL", "postgresql://hidden_spot:hidden_spot@localhost:5432/hidden_spot")
         self._legacy_by_store = self._load_legacy_index()
@@ -614,6 +644,25 @@ class ApiDatabase:
         # Highest score first, then shorter candidate.
         return sorted(scores.items(), key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
 
+    def _needs_taste_profile_override(self, summary_json: dict[str, Any]) -> bool:
+        taste = summary_json.get("taste_profile") if isinstance(summary_json.get("taste_profile"), dict) else {}
+        category_name = str(taste.get("category_name") or "").strip()
+        metrics = taste.get("metrics") if isinstance(taste.get("metrics"), list) else []
+        has_generic_tag = any(str(tag).strip() == "#실사용기반후기혼합" for tag in (summary_json.get("tags") or []))
+        is_generic_category = category_name in {"", "실사용 기반 후기 혼합", "processing"}
+        return is_generic_category or (has_generic_tag and len(metrics) > 0)
+
+    def _apply_manual_taste_profile_override(self, summary_json: dict[str, Any], *, naver_place_id: str) -> None:
+        override = self._MANUAL_TASTE_PROFILE_OVERRIDES.get(naver_place_id)
+        if not override:
+            return
+        if not self._needs_taste_profile_override(summary_json):
+            return
+        summary_json["taste_profile"] = {
+            "category_name": str(override.get("category_name") or "").strip(),
+            "metrics": override.get("metrics") if isinstance(override.get("metrics"), list) else [],
+        }
+
     def _to_restaurant_shape(self, row):
         store_id = str(row.get("store_id") or "").strip()
         legacy = self._legacy_by_store.get(store_id) or {}
@@ -651,6 +700,7 @@ class ApiDatabase:
         merged_reviews = db_reviews if db_reviews else legacy_reviews
 
         naver_place_id = str(row.get("naver_place_id") or legacy.get("naver_place_id") or row.get("store_id") or "").strip()
+        self._apply_manual_taste_profile_override(summary_json, naver_place_id=naver_place_id)
         name = str(row.get("name") or legacy.get("name") or "").strip()
         if self._looks_like_identifier_name(name, store_id=store_id, naver_place_id=naver_place_id) or self._looks_like_noise_name(name):
             name = ""
