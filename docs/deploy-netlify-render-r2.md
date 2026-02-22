@@ -40,6 +40,7 @@ This guide follows the stable setup:
 - `DATABASE_URL=<render-postgres-internal-url>`
 - `REDIS_URL=<render-keyvalue-internal-url>`
 - `RQ_QUEUE=hidden_spot`
+- `RQ_JOB_TIMEOUT_SEC=900`
 - `CORS_ALLOW_ORIGINS=https://<your-netlify-site>.netlify.app,http://localhost:3000`
 
 ### Worker service (`apps/worker`)
@@ -55,6 +56,7 @@ This guide follows the stable setup:
 - `PLAYWRIGHT_HEADLESS=true`
 - `CRAWL_RETRY_COUNT=2`
 - `CRAWL_DELAY_MS=1200`
+- `CRAWL_TIMEOUT_SEC=180`
 - `MINIO_ENDPOINT=<accountid>.r2.cloudflarestorage.com`
 - `MINIO_SECURE=true`
 - `MINIO_ACCESS_KEY=<r2-access-key-id>`

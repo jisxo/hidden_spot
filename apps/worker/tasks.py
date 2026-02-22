@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 
@@ -24,6 +25,15 @@ def _now_ms() -> int:
     return int(time.perf_counter() * 1000)
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name, str(default)) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> dict:
     db = WorkerDatabase()
     minio = MinioDataLakeClient()
@@ -31,6 +41,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
     collected_at = datetime.fromisoformat(collected_at_iso.replace("Z", "+00:00"))
     parts = KeyParts(store_id=store_id, collected_at_iso=collected_at_iso, run_id=run_id, dt=collected_at.strftime("%Y-%m-%d"))
 
+    stage = "crawl"
     try:
         crawl_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="crawling", progress=10)
@@ -57,6 +68,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             bronze_path=crawl_result["bronze_meta_path"],
         )
 
+        stage = "parse"
         parse_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="parsing", progress=45)
         parse_result = process_parse(minio=minio, db=db, parts=parts, run_id=run_id)
@@ -70,6 +82,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         )
         db.update_snapshot(run_id=run_id, status="parsed", progress=65, silver_path=parse_result["silver_path"])
 
+        stage = "llm"
         llm_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="analyzing", progress=75)
         llm_result = process_llm(
@@ -104,6 +117,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             category=primary_category,
         )
 
+        stage = "embed"
         embed_start = _now_ms()
         db.update_snapshot(run_id=run_id, status="embedding", progress=90)
         embedded = process_embedding(db=db, parts=parts, analysis_result=llm_result["analysis"])
@@ -128,13 +142,17 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
         raise
     except Exception as exc:
-        db.log_event(run_id=run_id, stage="crawl", status="failed", duration_ms=0, payload={"error": str(exc)})
+        db.log_event(run_id=run_id, stage=stage, status="failed", duration_ms=0, payload={"error": str(exc)})
         db.update_snapshot(run_id=run_id, status="failed", progress=100, error_reason=str(exc))
         raise
 
 
 def process_crawl(crawler: NaverMapsCrawler, minio: MinioDataLakeClient, parts: KeyParts, run_id: str, url: str) -> dict:
-    data = asyncio.run(crawler.crawl(url=url))
+    crawl_timeout_sec = _env_int("CRAWL_TIMEOUT_SEC", 180)
+    try:
+        data = asyncio.run(asyncio.wait_for(crawler.crawl(url=url), timeout=crawl_timeout_sec))
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(f"crawl timeout after {crawl_timeout_sec}s") from exc
 
     raw_html = data.get("raw_html", "")
     raw_html_bytes = raw_html.encode("utf-8")

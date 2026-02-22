@@ -15,6 +15,15 @@ from apps.api.store_id import derive_store_id
 from libs.common.run_context import new_run_id, utc_now, isoformat_z
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name, str(default)) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def _parse_cors_allow_origins() -> list[str]:
     default = "http://localhost:3000,http://127.0.0.1:3000"
     raw = (os.getenv("CORS_ALLOW_ORIGINS", default) or "").strip()
@@ -119,6 +128,7 @@ def _enqueue_job(url: str) -> JobCreateResponse:
     )
 
     q = _queue()
+    job_timeout_sec = _env_int("RQ_JOB_TIMEOUT_SEC", 900)
     rq_job = q.enqueue(
         "apps.worker.tasks.process_job",
         kwargs={
@@ -129,6 +139,7 @@ def _enqueue_job(url: str) -> JobCreateResponse:
         },
         job_id=run_id,
         retry=Retry(max=3, interval=[10, 30, 60]),
+        job_timeout=job_timeout_sec,
         result_ttl=86400,
         failure_ttl=604800,
     )
