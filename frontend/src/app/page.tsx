@@ -66,6 +66,18 @@ type MapBounds = {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_MAP_CENTER = { lat: 37.547241, lng: 127.047325 }; // 뚝섬역
 
+function resolveApiBaseUrl(): string {
+  const fallback = "http://localhost:8000";
+  const raw = (process.env.NEXT_PUBLIC_API_URL || fallback).trim();
+  const normalized = raw.replace(/\/+$/, "");
+
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  if (normalized.startsWith("localhost") || normalized.startsWith("127.0.0.1")) {
+    return `http://${normalized}`;
+  }
+  return `https://${normalized}`;
+}
+
 function fallbackRestaurantFromJob(params: { storeId: string; url: string; snapshot?: JobSnapshot | null }) {
   return {
     id: params.storeId,
@@ -92,7 +104,7 @@ function fallbackRestaurantFromJob(params: { storeId: string; url: string; snaps
 
 function HomeContent() {
   const [restaurants, setRestaurants] = useState<any[]>([]);
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const API_BASE_URL = resolveApiBaseUrl();
 
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
