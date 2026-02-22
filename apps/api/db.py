@@ -465,10 +465,13 @@ class ApiDatabase:
         summary = str(row.get("summary_3lines") or "").strip()
         signature_menu = row.get("signature_menu_json") or []
         has_menu = isinstance(signature_menu, list) and any(str(item).strip() for item in signature_menu)
+        has_summary = bool(summary) and not self._contains_portal_boilerplate(summary)
 
-        if not name:
+        # Some map pages hide/store the place title late in the DOM. Keep rows that still
+        # have meaningful analysis/menu even when name is missing.
+        if not name and not (has_menu or has_summary):
             return True
-        if store_id and name.lower() == store_id.lower() and not has_menu:
+        if store_id and name.lower() == store_id.lower() and not (has_menu or has_summary):
             return True
         if self._contains_portal_boilerplate(summary) and not has_menu:
             return True
