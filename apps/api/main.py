@@ -286,6 +286,11 @@ def manual_backfill(max_items: int = Query(0, ge=0, le=100000)):
     return result
 
 
+@app.post("/admin/reparse-store-names")
+def reparse_store_names(limit: int = Query(0, ge=0, le=100000)):
+    return _db.reparse_store_names(limit=limit)
+
+
 @app.post("/api/v1/restaurants/analyze")
 def analyze_restaurant(payload: AnalyzeCompatRequest):
     job = _enqueue_job(payload.url.strip())

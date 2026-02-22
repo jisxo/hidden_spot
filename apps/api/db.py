@@ -556,6 +556,10 @@ class ApiDatabase:
 
         if any(marker in lowered for marker in ("http://", "https://", "관련 링크", "에서 보기")):
             return True
+        if "플레이스 플러스" in text or re.search(r"\bplace\s*plus\b", lowered):
+            return True
+        if "이 장소에서" in text:
+            return True
 
         if len(text) > 42:
             return True
@@ -588,6 +592,8 @@ class ApiDatabase:
             "입장",
             "지하",
             "층별",
+            "플레이스",
+            "이 장소에서",
         )
         token_hits = sum(1 for token in noise_tokens if token in text)
         if token_hits >= 2:
@@ -661,6 +667,81 @@ class ApiDatabase:
         summary_json["taste_profile"] = {
             "category_name": str(override.get("category_name") or "").strip(),
             "metrics": override.get("metrics") if isinstance(override.get("metrics"), list) else [],
+        }
+
+    def reparse_store_names(self, *, limit: int = 0) -> dict[str, int]:
+        sql = """
+        SELECT
+            s.store_id,
+            s.naver_place_id,
+            s.name,
+            (
+                SELECT COALESCE(jsonb_agg(rv.text), '[]'::jsonb)
+                FROM (
+                    SELECT r.text
+                    FROM reviews r
+                    WHERE r.store_id = s.store_id
+                    ORDER BY r.created_at DESC
+                    LIMIT 100
+                ) rv
+            ) AS raw_reviews_json
+        FROM stores s
+        ORDER BY s.updated_at DESC NULLS LAST, s.store_id;
+        """
+
+        with self.conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+
+            total = len(rows)
+            if limit > 0:
+                rows = rows[:limit]
+
+            scanned = 0
+            updated = 0
+            skipped = 0
+            for row in rows:
+                scanned += 1
+                store_id = str(row.get("store_id") or "").strip()
+                if not store_id:
+                    skipped += 1
+                    continue
+
+                naver_place_id = str(row.get("naver_place_id") or "").strip()
+                current_name = str(row.get("name") or "").strip()
+                reviews = row.get("raw_reviews_json") if isinstance(row.get("raw_reviews_json"), list) else []
+
+                inferred_name = self._infer_name_from_reviews(reviews, store_id=store_id, naver_place_id=naver_place_id)
+                should_replace = (
+                    self._looks_like_identifier_name(current_name, store_id=store_id, naver_place_id=naver_place_id)
+                    or self._looks_like_noise_name(current_name)
+                )
+
+                next_name = inferred_name if should_replace else current_name
+                if not next_name or next_name == current_name:
+                    skipped += 1
+                    continue
+
+                with conn.cursor() as write_cur:
+                    write_cur.execute(
+                        """
+                        UPDATE stores
+                        SET name = %s, updated_at = NOW()
+                        WHERE store_id = %s
+                        """,
+                        (next_name, store_id),
+                    )
+                    if write_cur.rowcount > 0:
+                        updated += 1
+                    else:
+                        skipped += 1
+
+        return {
+            "total": total,
+            "scanned": scanned,
+            "updated": updated,
+            "skipped": skipped,
         }
 
     def _to_restaurant_shape(self, row):
