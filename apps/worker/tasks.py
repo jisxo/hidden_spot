@@ -66,6 +66,18 @@ def _put_debug_screenshot(
     return f"s3://{minio.artifacts_bucket}/{key}"
 
 
+def _sanitize_store_name(name: str | None, *, store_id: str, naver_place_id: str | None) -> str | None:
+    text = str(name or "").strip()
+    if not text:
+        return None
+    identifiers = {store_id.strip().lower()}
+    if naver_place_id:
+        identifiers.add(str(naver_place_id).strip().lower())
+    if text.lower() in identifiers:
+        return None
+    return text
+
+
 def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> dict:
     db = WorkerDatabase()
     minio = MinioDataLakeClient()
@@ -82,11 +94,16 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         crawler = NaverMapsCrawler()
         crawl_result = process_crawl(crawler=crawler, minio=minio, parts=parts, run_id=run_id, url=url)
         latest_page_screenshot = crawl_result.get("page_screenshot_bytes")
+        safe_store_name = _sanitize_store_name(
+            crawl_result.get("name"),
+            store_id=parts.store_id,
+            naver_place_id=crawl_result.get("naver_place_id"),
+        )
         db.upsert_store(
             store_id=parts.store_id,
             url=url,
             naver_place_id=crawl_result.get("naver_place_id"),
-            name=crawl_result.get("name"),
+            name=safe_store_name,
             address=crawl_result.get("address"),
             transport_info=crawl_result.get("address"),
             lat=crawl_result.get("latitude"),
@@ -143,7 +160,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             store_id=parts.store_id,
             url=url,
             naver_place_id=crawl_result.get("naver_place_id"),
-            name=crawl_result.get("name"),
+            name=safe_store_name,
             address=crawl_result.get("address"),
             transport_info=llm_result["analysis"].get("transport_info") or crawl_result.get("address"),
             lat=crawl_result.get("latitude"),

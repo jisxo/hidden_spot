@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -146,7 +147,7 @@ class ApiDatabase:
         DO UPDATE SET
             url = EXCLUDED.url,
             naver_place_id = COALESCE(NULLIF(EXCLUDED.naver_place_id, ''), stores.naver_place_id),
-            name = COALESCE(EXCLUDED.name, stores.name),
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), stores.name),
             address = COALESCE(NULLIF(EXCLUDED.address, ''), stores.address),
             transport_info = COALESCE(NULLIF(EXCLUDED.transport_info, ''), stores.transport_info),
             lat = COALESCE(EXCLUDED.lat, stores.lat),
@@ -493,6 +494,40 @@ class ApiDatabase:
             return True
         return False
 
+    def _looks_like_identifier_name(self, name: str, *, store_id: str, naver_place_id: str) -> bool:
+        text = (name or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        identifiers = {store_id.lower(), naver_place_id.lower()}
+        if lowered in identifiers:
+            return True
+        return False
+
+    def _infer_name_from_reviews(self, reviews: list[Any], *, store_id: str, naver_place_id: str) -> str:
+        for item in reviews[:30]:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            candidate = ""
+            # Common pattern from Naver place overview blocks.
+            m = re.search(r"^(.{2,40}?)\s+(한식|카페|중식|일식|양식|분식|고기집|음식점)\b", text)
+            if m:
+                candidate = m.group(1).strip()
+            # Generic "XXX 은/는 ..." intro line from generated summaries.
+            if not candidate:
+                m = re.search(r"^(.{2,40}?)(?:은|는)\s", text)
+                if m:
+                    candidate = m.group(1).strip()
+            if not candidate:
+                continue
+            if self._looks_like_identifier_name(candidate, store_id=store_id, naver_place_id=naver_place_id):
+                continue
+            if any(marker in candidate.lower() for marker in ["관련 링크", "에서 보기", "http://", "https://"]):
+                continue
+            return candidate
+        return ""
+
     def _to_restaurant_shape(self, row):
         store_id = str(row.get("store_id") or "").strip()
         legacy = self._legacy_by_store.get(store_id) or {}
@@ -525,12 +560,24 @@ class ApiDatabase:
         signature_menu = row.get("signature_menu_json") if isinstance(row.get("signature_menu_json"), list) else legacy.get("must_eat_menus") if isinstance(legacy.get("must_eat_menus"), list) else []
         categories = row.get("categories_json") if isinstance(row.get("categories_json"), list) else []
 
-        name = str(row.get("name") or legacy.get("name") or store_id).strip()
+        db_reviews = row.get("raw_reviews_json") if isinstance(row.get("raw_reviews_json"), list) else []
+        legacy_reviews = legacy.get("raw_reviews") if isinstance(legacy.get("raw_reviews"), list) else []
+        merged_reviews = db_reviews if db_reviews else legacy_reviews
+
+        naver_place_id = str(row.get("naver_place_id") or legacy.get("naver_place_id") or row.get("store_id") or "").strip()
+        name = str(row.get("name") or legacy.get("name") or "").strip()
+        if self._looks_like_identifier_name(name, store_id=store_id, naver_place_id=naver_place_id):
+            name = ""
+        if not name:
+            name = self._infer_name_from_reviews(merged_reviews, store_id=store_id, naver_place_id=naver_place_id)
+        if not name:
+            name = "이름 확인 중"
+
         address = str(row.get("address") or legacy.get("address") or "").strip()
         search_tags: list[str] = []
         search_tags.extend([str(x).strip() for x in signature_menu if str(x).strip()])
         search_tags.extend([str(x).strip() for x in categories if str(x).strip()])
-        if name:
+        if name and name != "이름 확인 중":
             search_tags.append(name)
         if address:
             search_tags.append(address)
@@ -544,12 +591,9 @@ class ApiDatabase:
             seen.add(tag)
             dedup_tags.append(tag)
 
-        db_reviews = row.get("raw_reviews_json") if isinstance(row.get("raw_reviews_json"), list) else []
-        legacy_reviews = legacy.get("raw_reviews") if isinstance(legacy.get("raw_reviews"), list) else []
-
         return {
             "id": row.get("store_id"),
-            "naver_place_id": str(row.get("naver_place_id") or legacy.get("naver_place_id") or row.get("store_id") or ""),
+            "naver_place_id": naver_place_id,
             "name": name,
             "address": address,
             "latitude": float(row.get("lat")) if row.get("lat") is not None else float(legacy.get("latitude") or 37.5665),
@@ -566,5 +610,5 @@ class ApiDatabase:
             "search_tags": dedup_tags,
             "original_url": row.get("url") or legacy.get("original_url") or "",
             "created_at": row.get("collected_at"),
-            "raw_reviews": db_reviews if db_reviews else legacy_reviews,
+            "raw_reviews": merged_reviews,
         }

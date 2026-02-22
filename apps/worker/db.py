@@ -128,7 +128,7 @@ class WorkerDatabase:
         DO UPDATE SET
             url = EXCLUDED.url,
             naver_place_id = COALESCE(NULLIF(EXCLUDED.naver_place_id, ''), stores.naver_place_id),
-            name = COALESCE(EXCLUDED.name, stores.name),
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), stores.name),
             address = COALESCE(NULLIF(EXCLUDED.address, ''), stores.address),
             transport_info = COALESCE(NULLIF(EXCLUDED.transport_info, ''), stores.transport_info),
             lat = COALESCE(EXCLUDED.lat, stores.lat),

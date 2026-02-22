@@ -125,7 +125,7 @@ class NaverMapsCrawler:
                         html = mobile_html
 
             if not name:
-                name = self._extract_title_name(html_main) or self._extract_title_name(html) or place_id
+                name = self._extract_title_name(html_main) or self._extract_title_name(html)
 
             blocked_reason = self._detect_blocked_reason(
                 final_url=current_url,
