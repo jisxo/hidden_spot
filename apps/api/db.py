@@ -676,6 +676,17 @@ class ApiDatabase:
             "metrics": override.get("metrics") if isinstance(override.get("metrics"), list) else [],
         }
 
+    def _count_name_mentions(self, name: str, reviews: list[Any]) -> int:
+        needle = str(name or "").strip().lower()
+        if not needle:
+            return 0
+        count = 0
+        for item in reviews[:60]:
+            text = str(item or "").lower()
+            if needle and needle in text:
+                count += 1
+        return count
+
     def reparse_store_names(self, *, limit: int = 0) -> dict[str, int]:
         sql = """
         SELECT
@@ -720,11 +731,19 @@ class ApiDatabase:
                 reviews = row.get("raw_reviews_json") if isinstance(row.get("raw_reviews_json"), list) else []
 
                 inferred_name = self._infer_name_from_reviews(reviews, store_id=store_id, naver_place_id=naver_place_id)
-                should_replace = (
+                should_replace_by_quality = (
                     self._looks_like_identifier_name(current_name, store_id=store_id, naver_place_id=naver_place_id)
                     or self._looks_like_noise_name(current_name)
                 )
+                current_mentions = self._count_name_mentions(current_name, reviews)
+                inferred_mentions = self._count_name_mentions(inferred_name, reviews)
+                should_replace_by_confidence = bool(
+                    inferred_name
+                    and inferred_name != current_name
+                    and inferred_mentions >= max(2, current_mentions + 1)
+                )
 
+                should_replace = should_replace_by_quality or should_replace_by_confidence
                 next_name = inferred_name if should_replace else current_name
                 if not next_name or next_name == current_name:
                     skipped += 1
