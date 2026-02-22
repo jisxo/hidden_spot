@@ -571,6 +571,21 @@ class ApiDatabase:
         if re.search(r"^(?:지하|[0-9]+층)\b", text):
             return True
 
+        generic_names = {
+            "여기",
+            "이곳",
+            "성수에",
+            "성수에는",
+            "저희는",
+            "저는",
+            "이번에는",
+        }
+        if text in generic_names:
+            return True
+
+        if text.count(" ") >= 2 and any(token in text for token in ("블로그", "후기", "추천", "먹어야", "일상")):
+            return True
+
         noise_tokens = (
             "팩트만",
             "전달",
@@ -622,6 +637,10 @@ class ApiDatabase:
                 return
             scores[candidate] = scores.get(candidate, 0) + weight
 
+        # Keep candidate format conservative: 1~4 tokens, each up to 15 chars.
+        token = r"[가-힣A-Za-z0-9&()'`·\-]{1,15}"
+        phrase = rf"({token}(?:\s{token}){{0,3}})"
+
         for item in reviews[:30]:
             text = re.sub(r"\s+", " ", str(item or "")).strip()
             if not text:
@@ -636,14 +655,14 @@ class ApiDatabase:
 
             # Naver overview style: "<name> 한식 방문자 리뷰 ..."
             m = re.search(
-                r"^(.{2,40}?)\s+(한식|카페|중식|일식|양식|분식|고기집|음식점|주점|술집|브런치|베이커리|방문자 리뷰)\b",
+                rf"^{phrase}\s+(한식|카페|중식|일식|양식|분식|고기집|음식점|주점|술집|브런치|베이커리|방문자 리뷰)\b",
                 text,
             )
             if m:
                 add_candidate(m.group(1), 6)
 
             # Summary style: "<name>은/는 ..."
-            m = re.search(r"^(.{2,40}?)(?:은|는)\s", text)
+            m = re.search(rf"^{phrase}(?:은|는)\s", text)
             if m:
                 add_candidate(m.group(1), 4)
 
