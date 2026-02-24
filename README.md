@@ -31,7 +31,7 @@
 flowchart LR
   U[User / Web] --> A[FastAPI Job API]
   A -->|POST /jobs| Q[Redis Queue RQ]
-  A -->|GET /jobs/{id}| S[(store_snapshots status)]
+  A -->|GET /jobs/:id| S[(store_snapshots status)]
 
   Q --> W[Worker]
   W --> C[Crawl: Playwright]
