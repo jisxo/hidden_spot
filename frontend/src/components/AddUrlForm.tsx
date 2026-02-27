@@ -42,26 +42,27 @@ export default function AddUrlForm({ onAnalyze, isLoading }: AddUrlFormProps) {
                         <Link2 size={16} className="absolute top-4 right-4 text-slate-300 group-focus-within:text-orange-400 transition-colors" />
                     </div>
 
-                    <Button
-                        type="submit"
-                        disabled={isLoading || !url.trim()}
-                        className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 rounded-2xl transition-all"
-                    >
-                        {isLoading ? (
-                            <>
-                                <Loader2 size={18} className="animate-spin text-orange-500" />
-                                <span className="text-sm font-bold">AI 분석 중...</span>
-                            </>
-                        ) : (
-                            <>
-                                <span className="text-sm font-bold">분석 및 저장</span>
-                                <Sparkles size={14} className="ml-1 text-orange-400" />
-                            </>
-                        )}
-                    </Button>
+                    <div className="sticky bottom-0 bg-white/95 backdrop-blur-sm pt-1.5 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+                        <Button
+                            type="submit"
+                            disabled={isLoading || !url.trim()}
+                            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 rounded-2xl transition-all"
+                        >
+                            {isLoading ? (
+                                <>
+                                    <Loader2 size={18} className="animate-spin text-orange-500" />
+                                    <span className="text-sm font-bold">AI 분석 중...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-sm font-bold">분석 및 저장</span>
+                                    <Sparkles size={14} className="ml-1 text-orange-400" />
+                                </>
+                            )}
+                        </Button>
+                    </div>
                 </form>
             </CardContent>
         </Card>
     );
 }
-

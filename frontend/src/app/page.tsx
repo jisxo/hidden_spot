@@ -558,12 +558,19 @@ function HomeContent() {
             <DialogTrigger asChild>
               <button className="w-14 h-14 bg-slate-900 rounded-full shadow-2xl flex items-center justify-center text-white"><Plus size={28} /></button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px] rounded-3xl p-0 bg-transparent border-none shadow-none">
+            <DialogContent
+              showCloseButton={false}
+              className="left-0 top-0 h-[100dvh] w-screen max-w-none translate-x-0 translate-y-0 border-none bg-transparent p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-none"
+            >
               <DialogHeader className="sr-only">
                 <DialogTitle>맛집 등록</DialogTitle>
                 <DialogDescription>새로운 맛집의 네이버 지도 URL을 입력하여 분석합니다.</DialogDescription>
               </DialogHeader>
-              <AddUrlForm onAnalyze={(url) => { handleAnalyze(url); setIsRegisterOpen(false); }} isLoading={isLoading} />
+              <div className="mx-auto flex h-full w-full max-w-[460px] items-end">
+                <div className="w-full max-h-[min(72dvh,36rem)] overflow-y-auto overscroll-contain">
+                  <AddUrlForm onAnalyze={(url) => { handleAnalyze(url); setIsRegisterOpen(false); }} isLoading={isLoading} />
+                </div>
+              </div>
             </DialogContent>
           </Dialog>
         </div>
