@@ -404,7 +404,7 @@ function HomeContent() {
   return (
     <main className="relative w-full h-screen overflow-hidden bg-white font-sans text-slate-900 flex flex-col md:flex-row" suppressHydrationWarning>
       {/* Sidebar Area */}
-      <aside className={`order-2 md:order-1 w-full md:w-[400px] bg-slate-50 border-t md:border-t-0 md:border-r border-slate-200 z-20 flex flex-col relative shadow-[0_-10px_30px_rgba(0,0,0,0.05)] md:shadow-none transition-all duration-300 ${isListVisible ? 'h-[52vh] md:h-full' : 'h-0 md:h-full overflow-hidden md:overflow-visible pointer-events-none md:pointer-events-auto'}`}>
+      <aside className={`order-2 md:order-1 w-full md:w-[400px] bg-slate-50 border-t md:border-t-0 md:border-r border-slate-200 z-20 flex flex-col relative shadow-[0_-10px_30px_rgba(0,0,0,0.05)] md:shadow-none transition-all duration-300 ${isListVisible ? 'h-[calc(100dvh-(env(safe-area-inset-top)+4.75rem))] md:h-full' : 'h-0 md:h-full overflow-hidden md:overflow-visible pointer-events-none md:pointer-events-auto'}`}>
         <header className="p-6 bg-white border-b border-slate-100 flex-none z-10 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-black tracking-tight text-slate-900 mb-0.5 font-display uppercase italic text-shadow-sm">HIDDEN SPOT</h1>
@@ -467,7 +467,7 @@ function HomeContent() {
       </aside>
 
       {/* Map Area */}
-      <section className={`order-1 md:order-2 flex-1 relative bg-slate-100 ${isListVisible ? "h-[48vh]" : "h-[100vh]"} md:h-full`}>
+      <section className={`order-1 md:order-2 flex-1 relative bg-slate-100 ${isListVisible ? "h-[calc(env(safe-area-inset-top)+4.75rem)]" : "h-[100dvh]"} md:h-full`}>
         {/* Mobile Map Search Header */}
         <div className="md:hidden absolute top-[max(1rem,env(safe-area-inset-top))] left-4 right-4 z-30 pointer-events-none">
           <div className="pointer-events-auto bg-white/90 backdrop-blur-xl border border-slate-200 rounded-2xl shadow-xl flex items-center px-4 h-12 ring-1 ring-black/5">
