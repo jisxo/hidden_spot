@@ -546,7 +546,7 @@ function HomeContent() {
         )}
 
         {/* FABs for Mobile */}
-        <div className="md:hidden absolute bottom-6 right-6 z-50 flex flex-col gap-3">
+        <div className="md:hidden fixed right-[max(1.5rem,env(safe-area-inset-right))] bottom-[max(1.5rem,env(safe-area-inset-bottom))] z-[90] flex flex-col gap-3">
           <button
             aria-label={isListVisible ? "Hide list view" : "Show list view"}
             onClick={() => setIsListVisible(!isListVisible)}
