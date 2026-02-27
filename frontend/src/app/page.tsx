@@ -492,7 +492,7 @@ function HomeContent() {
             )}
             <button
               onClick={handleApplyFilters}
-              className="ml-2 text-[10px] font-black text-slate-700 rounded-md border border-slate-200 px-2 py-1"
+              className="ml-2 shrink-0 whitespace-nowrap rounded-md border border-slate-200 px-1.5 py-1 text-[clamp(9px,2.6vw,10px)] leading-none font-black text-slate-700"
             >
               조건 적용
             </button>
