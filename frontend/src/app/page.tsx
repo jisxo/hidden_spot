@@ -469,7 +469,7 @@ function HomeContent() {
       {/* Map Area */}
       <section className={`order-1 md:order-2 flex-1 relative bg-slate-100 ${isListVisible ? "h-[48vh]" : "h-[100vh]"} md:h-full`}>
         {/* Mobile Map Search Header */}
-        <div className="md:hidden absolute top-4 left-4 right-20 z-30 pointer-events-none">
+        <div className="md:hidden absolute top-[max(1rem,env(safe-area-inset-top))] left-4 right-4 z-30 pointer-events-none">
           <div className="pointer-events-auto bg-white/90 backdrop-blur-xl border border-slate-200 rounded-2xl shadow-xl flex items-center px-4 h-12 ring-1 ring-black/5">
             <Search className="text-slate-400 mr-3" size={18} />
             <input
@@ -498,7 +498,7 @@ function HomeContent() {
             </button>
           </div>
         </div>
-        <div className="md:hidden absolute top-4 right-4 z-30">
+        <div className="md:hidden absolute top-[calc(env(safe-area-inset-top)+4.25rem)] right-4 z-30">
           <div className="rounded-xl bg-white/90 border border-slate-200 p-1 shadow">
             <button
               type="button"
