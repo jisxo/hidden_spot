@@ -36,6 +36,7 @@ class WorkerDatabase:
         error_type: str | None = None,
         error_stage: str | None = None,
         evidence_paths_json: list[str] | None = None,
+        quality_band: str | None = None,
     ) -> None:
         sql = """
         UPDATE store_snapshots
@@ -48,6 +49,7 @@ class WorkerDatabase:
             error_type=%s,
             error_stage=%s,
             evidence_paths_json=COALESCE(%s::jsonb, '[]'::jsonb),
+            quality_band=COALESCE(%s, quality_band),
             updated_at=NOW()
         WHERE run_id=%s;
         """
@@ -65,6 +67,7 @@ class WorkerDatabase:
                         error_type,
                         error_stage,
                         json.dumps(evidence_paths_json) if evidence_paths_json is not None else None,
+                        quality_band,
                         run_id,
                     ),
                 )
@@ -86,6 +89,33 @@ class WorkerDatabase:
         }
         print(json.dumps(event, ensure_ascii=False))
 
+    def get_recent_quality_band_counts(self, limit: int = 50) -> tuple[dict[str, int], int]:
+        sql = """
+        WITH recent AS (
+            SELECT quality_band
+            FROM store_snapshots
+            WHERE quality_band IN ('insufficient', 'thin', 'good')
+            ORDER BY updated_at DESC
+            LIMIT %s
+        )
+        SELECT quality_band, COUNT(*) AS count
+        FROM recent
+        GROUP BY quality_band;
+        """
+        counts = {"insufficient": 0, "thin": 0, "good": 0}
+        total = 0
+        with self.conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (limit,))
+                rows = cur.fetchall()
+        for row in rows:
+            band = str(row.get("quality_band") or "")
+            count = int(row.get("count") or 0)
+            if band in counts:
+                counts[band] = count
+                total += count
+        return counts, total
+
     def ensure_columns(self) -> None:
         sql = """
         DO $$
@@ -101,6 +131,7 @@ class WorkerDatabase:
                 ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_type TEXT;
                 ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_stage TEXT;
                 ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+                ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS quality_band TEXT;
             END IF;
         END $$;
         """

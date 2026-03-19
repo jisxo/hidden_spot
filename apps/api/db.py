@@ -115,6 +115,7 @@ class ApiDatabase:
             error_type TEXT,
             error_stage TEXT,
             evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+            quality_band TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
@@ -163,6 +164,7 @@ class ApiDatabase:
         ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_type TEXT;
         ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS error_stage TEXT;
         ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS evidence_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+        ALTER TABLE store_snapshots ADD COLUMN IF NOT EXISTS quality_band TEXT;
         """
         with self.conn() as conn:
             with conn.cursor() as cur:

@@ -64,6 +64,24 @@ def _quality_band(review_count: int, min_review_count: int) -> str:
     return "good"
 
 
+def _with_quality_band_ratios(db: WorkerDatabase, payload: dict, current_band: str, window_size: int = 50) -> dict:
+    counts, total = db.get_recent_quality_band_counts(limit=window_size)
+    if current_band in counts:
+        counts[current_band] += 1
+        total += 1
+
+    ratios = {
+        band: round((count / total), 4) if total > 0 else 0.0
+        for band, count in counts.items()
+    }
+    enriched = dict(payload)
+    enriched["quality_band"] = current_band
+    enriched["quality_band_counts_recent"] = counts
+    enriched["quality_band_ratios_recent"] = ratios
+    enriched["quality_band_window_size"] = total
+    return enriched
+
+
 def _put_debug_screenshot(
     *,
     minio: MinioDataLakeClient,
@@ -122,19 +140,23 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         )
 
         duration = _now_ms() - crawl_start
+        crawl_quality_band = _quality_band(crawl_result["review_count"], min_review_count)
         db.log_event(
             run_id=run_id,
             stage="crawl",
             status="ok",
             duration_ms=duration,
-            payload={
+            payload=_with_quality_band_ratios(
+                db,
+                {
                 "review_count": crawl_result["review_count"],
                 "review_count_before_mobile": crawl_result.get("review_count_before_mobile", crawl_result["review_count"]),
                 "mobile_fallback_used": crawl_result.get("mobile_fallback_used", False),
                 "frame_found": crawl_result.get("frame_found", False),
                 "extraction_route": crawl_result.get("extraction_route", "unknown"),
-                "quality_band": _quality_band(crawl_result["review_count"], min_review_count),
-            },
+                },
+                crawl_quality_band,
+            ),
         )
         db.update_snapshot(
             run_id=run_id,
@@ -148,16 +170,20 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         db.update_snapshot(run_id=run_id, status="parsing", progress=45)
         parse_result = process_parse(minio=minio, db=db, parts=parts, run_id=run_id)
         parse_duration = _now_ms() - parse_start
+        parse_quality_band = _quality_band(parse_result["review_count"], min_review_count)
         db.log_event(
             run_id=run_id,
             stage="parse",
             status="ok",
             duration_ms=parse_duration,
-            payload={
+            payload=_with_quality_band_ratios(
+                db,
+                {
                 "review_count": parse_result["review_count"],
                 "min_review_count": min_review_count,
-                "quality_band": _quality_band(parse_result["review_count"], min_review_count),
-            },
+                },
+                parse_quality_band,
+            ),
         )
         if parse_result["review_count"] < min_review_count:
             db.log_event(
@@ -165,14 +191,24 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
                 stage="quality",
                 status="warn",
                 duration_ms=0,
-                payload={
+                payload=_with_quality_band_ratios(
+                    db,
+                    {
                     "review_count": parse_result["review_count"],
                     "min_review_count": min_review_count,
                     "message": "insufficient reviews for analysis",
-                },
+                    },
+                    parse_quality_band,
+                ),
             )
             raise InsufficientReviewsError(parse_result["review_count"], min_review_count)
-        db.update_snapshot(run_id=run_id, status="parsed", progress=65, silver_path=parse_result["silver_path"])
+        db.update_snapshot(
+            run_id=run_id,
+            status="parsed",
+            progress=65,
+            silver_path=parse_result["silver_path"],
+            quality_band=parse_quality_band,
+        )
 
         stage = "llm"
         llm_start = _now_ms()
@@ -261,6 +297,7 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             error_type=error_type,
             error_stage=error_stage,
             evidence_paths_json=evidence_paths,
+            quality_band="insufficient" if isinstance(exc, InsufficientReviewsError) else None,
         )
         raise
 
