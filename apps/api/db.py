@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class ApiDatabase:
@@ -468,7 +471,17 @@ class ApiDatabase:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, (min_score, term, like, like, like, like, like))
                 rows = cur.fetchall()
+        raw_count = len(rows)
         filtered_rows = [row for row in rows if not self._is_low_quality_projection(row)]
+        filtered_count = len(filtered_rows)
+        if raw_count == 0 or filtered_count != raw_count:
+            logger.info(
+                "db.list_restaurants raw_rows=%d filtered_rows=%d min_score=%d keyword_set=%s",
+                raw_count,
+                filtered_count,
+                min_score,
+                bool(term),
+            )
         return [self._to_restaurant_shape(row) for row in filtered_rows]
 
     def get_restaurant(self, store_id: str):

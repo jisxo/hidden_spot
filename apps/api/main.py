@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from threading import Lock
@@ -108,6 +109,7 @@ app.add_middleware(
 _db = ApiDatabase()
 _backfill_lock = Lock()
 _last_backfill_attempt_at = 0.0
+logger = logging.getLogger("uvicorn.error")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -128,35 +130,50 @@ def _queue() -> Queue:
 
 def _auto_backfill_if_empty() -> None:
     if not _env_bool("AUTO_BACKFILL_FROM_GOLD_ON_EMPTY", True):
+        logger.info("startup backfill skipped reason=disabled")
         return
 
     global _last_backfill_attempt_at
     now = time.time()
     cooldown_sec = _env_int("BACKFILL_COOLDOWN_SEC", 300)
     if now - _last_backfill_attempt_at < cooldown_sec:
+        logger.info(
+            "startup backfill skipped reason=cooldown age_sec=%.3f cooldown_sec=%d",
+            now - _last_backfill_attempt_at,
+            cooldown_sec,
+        )
         return
 
     rows = _db.list_restaurants()
+    logger.info("startup serving check rows=%d", len(rows))
     if rows:
         return
 
     with _backfill_lock:
         rows = _db.list_restaurants()
+        logger.info("startup serving recheck rows=%d", len(rows))
         if rows:
             return
         _last_backfill_attempt_at = now
         max_items = _env_int("BACKFILL_MAX_ITEMS", 0)
-        backfill_serving_from_gold(db=_db, max_items=max_items)
+        logger.info("startup backfill start max_items=%d", max_items)
+        result = backfill_serving_from_gold(db=_db, max_items=max_items)
+        logger.info("startup backfill result=%s", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        rows_after = _db.list_restaurants()
+        logger.info("startup serving post_backfill rows=%d", len(rows_after))
 
 
 @app.on_event("startup")
 def startup() -> None:
+    logger.info("api startup begin")
     _db.ensure_tables()
+    logger.info("api startup ensure_tables complete")
     try:
         _auto_backfill_if_empty()
     except Exception:
         # Startup should stay resilient even if R2 or backfill is temporarily unavailable.
-        pass
+        logger.exception("api startup backfill failed")
+    logger.info("api startup complete")
 
 
 def _enqueue_job(url: str) -> JobCreateResponse:
@@ -288,7 +305,17 @@ def health_check():
 # Frontend compatibility endpoints (`frontend/src/app/page.tsx` uses /api/v1/restaurants*).
 @app.get("/api/v1/restaurants")
 def list_restaurants(min_score: int = Query(0, ge=0, le=100), keyword: str | None = None):
-    return _db.list_restaurants(min_score=min_score, keyword=keyword)
+    started = time.perf_counter()
+    rows = _db.list_restaurants(min_score=min_score, keyword=keyword)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "list_restaurants rows=%d min_score=%d keyword_set=%s duration_ms=%d",
+        len(rows),
+        min_score,
+        bool(keyword and keyword.strip()),
+        duration_ms,
+    )
+    return rows
 
 
 @app.post("/admin/backfill")
