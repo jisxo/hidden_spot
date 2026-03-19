@@ -36,69 +36,94 @@ def backfill_serving_from_gold(
     skipped = 0
     failures = 0
 
-    for key in gold_keys:
-        try:
-            payload = client.get_json(gold_bucket, key)
-            if not isinstance(payload, dict):
-                skipped += 1
-                continue
+    with db.conn() as conn:
+        for index, key in enumerate(gold_keys):
+            savepoint = f"backfill_item_{index}"
+            with conn.cursor() as cur:
+                cur.execute(f"SAVEPOINT {savepoint}")
 
-            store_id = str(payload.get("store_id") or "").strip()
-            run_id = str(payload.get("run_id") or "").strip()
-            collected_at = str(payload.get("collected_at") or "").strip()
-            analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
-            legacy = payload.get("legacy_source") if isinstance(payload.get("legacy_source"), dict) else {}
+            try:
+                payload = client.get_json(gold_bucket, key)
+                if not isinstance(payload, dict):
+                    skipped += 1
+                    with conn.cursor() as cur:
+                        cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    continue
 
-            if not store_id or not run_id or not collected_at:
-                skipped += 1
-                continue
+                store_id = str(payload.get("store_id") or "").strip()
+                run_id = str(payload.get("run_id") or "").strip()
+                collected_at = str(payload.get("collected_at") or "").strip()
+                analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+                legacy = payload.get("legacy_source") if isinstance(payload.get("legacy_source"), dict) else {}
 
-            url = (
-                str(legacy.get("original_url") or "").strip()
-                or str(legacy.get("url") or "").strip()
-                or f"https://map.naver.com/p/entry/place/{store_id}"
-            )
-            name = str(legacy.get("name") or "").strip() or None
-            lat = _safe_float(legacy.get("latitude"), 37.5665)
-            lng = _safe_float(legacy.get("longitude"), 126.9780)
-            category = str(analysis.get("vibe") or "").strip() or None
+                if not store_id or not run_id or not collected_at:
+                    skipped += 1
+                    with conn.cursor() as cur:
+                        cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    continue
 
-            summary_3lines = str(analysis.get("summary_3lines") or "").strip()
-            vibe = str(analysis.get("vibe") or "").strip()
-            signature_menu_json = analysis.get("signature_menu") if isinstance(analysis.get("signature_menu"), list) else []
-            tips_json = analysis.get("tips") if isinstance(analysis.get("tips"), list) else []
-            score = _safe_float(analysis.get("score"), 0.0)
-            ad_review_ratio = _safe_float(analysis.get("ad_review_ratio"), 0.0)
-            review_summary_json = analysis.get("review_summary") if isinstance(analysis.get("review_summary"), dict) else {}
-            categories_json = analysis.get("categories") if isinstance(analysis.get("categories"), list) else []
-            gold_path = f"s3://{gold_bucket}/{key}"
+                url = (
+                    str(legacy.get("original_url") or "").strip()
+                    or str(legacy.get("url") or "").strip()
+                    or f"https://map.naver.com/p/entry/place/{store_id}"
+                )
+                name = str(legacy.get("name") or "").strip() or None
+                lat = _safe_float(legacy.get("latitude"), 37.5665)
+                lng = _safe_float(legacy.get("longitude"), 126.9780)
+                category = str(analysis.get("vibe") or "").strip() or None
 
-            db.upsert_store(store_id=store_id, url=url, name=name, lat=lat, lng=lng, category=category)
-            db.upsert_analysis(
-                store_id=store_id,
-                collected_at_iso=collected_at,
-                run_id=run_id,
-                summary_3lines=summary_3lines,
-                vibe=vibe,
-                signature_menu_json=signature_menu_json,
-                tips_json=tips_json,
-                score=score,
-                ad_review_ratio=ad_review_ratio,
-                review_summary_json=review_summary_json,
-                categories_json=categories_json,
-            )
-            db.upsert_snapshot(
-                store_id=store_id,
-                collected_at_iso=collected_at,
-                run_id=run_id,
-                url=url,
-                status="completed",
-                progress=100,
-                gold_path=gold_path,
-            )
-            upserted += 1
-        except Exception:
-            failures += 1
+                summary_3lines = str(analysis.get("summary_3lines") or "").strip()
+                vibe = str(analysis.get("vibe") or "").strip()
+                signature_menu_json = analysis.get("signature_menu") if isinstance(analysis.get("signature_menu"), list) else []
+                tips_json = analysis.get("tips") if isinstance(analysis.get("tips"), list) else []
+                score = _safe_float(analysis.get("score"), 0.0)
+                ad_review_ratio = _safe_float(analysis.get("ad_review_ratio"), 0.0)
+                review_summary_json = analysis.get("review_summary") if isinstance(analysis.get("review_summary"), dict) else {}
+                categories_json = analysis.get("categories") if isinstance(analysis.get("categories"), list) else []
+                gold_path = f"s3://{gold_bucket}/{key}"
+
+                db.upsert_store(
+                    store_id=store_id,
+                    url=url,
+                    name=name,
+                    lat=lat,
+                    lng=lng,
+                    category=category,
+                    conn=conn,
+                )
+                db.upsert_analysis(
+                    store_id=store_id,
+                    collected_at_iso=collected_at,
+                    run_id=run_id,
+                    summary_3lines=summary_3lines,
+                    vibe=vibe,
+                    signature_menu_json=signature_menu_json,
+                    tips_json=tips_json,
+                    score=score,
+                    ad_review_ratio=ad_review_ratio,
+                    review_summary_json=review_summary_json,
+                    categories_json=categories_json,
+                    conn=conn,
+                )
+                db.upsert_snapshot(
+                    store_id=store_id,
+                    collected_at_iso=collected_at,
+                    run_id=run_id,
+                    url=url,
+                    status="completed",
+                    progress=100,
+                    gold_path=gold_path,
+                    conn=conn,
+                )
+                upserted += 1
+
+                with conn.cursor() as cur:
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception:
+                failures += 1
+                with conn.cursor() as cur:
+                    cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
 
     return {
         "ok": failures == 0,

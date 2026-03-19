@@ -15,6 +15,15 @@ class DQError(Exception):
     pass
 
 
+class InsufficientReviewsError(DQError):
+    def __init__(self, review_count: int, min_required: int) -> None:
+        self.review_count = review_count
+        self.min_required = min_required
+        super().__init__(
+            f"리뷰 수가 부족해 AI 미식 가이드를 만들 수 없습니다. 현재 {review_count}개가 수집되었고 최소 {min_required}개가 필요합니다."
+        )
+
+
 def _is_portal_noise_text(text: str) -> bool:
     if not text:
         return False

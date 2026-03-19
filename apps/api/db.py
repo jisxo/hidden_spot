@@ -73,6 +73,16 @@ class ApiDatabase:
         finally:
             conn.close()
 
+    def _execute_write(self, sql: str, params: tuple[Any, ...], *, conn: Any | None = None) -> None:
+        if conn is None:
+            with self.conn() as own_conn:
+                with own_conn.cursor() as cur:
+                    cur.execute(sql, params)
+            return
+
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+
     def ensure_tables(self) -> None:
         sql = """
         CREATE EXTENSION IF NOT EXISTS vector;
@@ -169,6 +179,7 @@ class ApiDatabase:
         lat: float | None = None,
         lng: float | None = None,
         category: str | None = None,
+        conn: Any | None = None,
     ) -> None:
         sql = """
         INSERT INTO stores (store_id, url, naver_place_id, name, address, transport_info, lat, lng, category)
@@ -185,9 +196,11 @@ class ApiDatabase:
             category = COALESCE(EXCLUDED.category, stores.category),
             updated_at = NOW();
         """
-        with self.conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (store_id, url, naver_place_id, name, address, transport_info, lat, lng, category))
+        self._execute_write(
+            sql,
+            (store_id, url, naver_place_id, name, address, transport_info, lat, lng, category),
+            conn=conn,
+        )
 
     def create_snapshot(self, store_id: str, collected_at_iso: str, run_id: str, url: str, status: str) -> None:
         sql = """
@@ -214,6 +227,7 @@ class ApiDatabase:
         error_type: str | None = None,
         error_stage: str | None = None,
         evidence_paths_json: list[str] | None = None,
+        conn: Any | None = None,
     ) -> None:
         sql = """
         INSERT INTO store_snapshots (
@@ -237,26 +251,25 @@ class ApiDatabase:
             evidence_paths_json = EXCLUDED.evidence_paths_json,
             updated_at = NOW();
         """
-        with self.conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    (
-                        store_id,
-                        collected_at_iso,
-                        run_id,
-                        url,
-                        bronze_path,
-                        silver_path,
-                        gold_path,
-                        status,
-                        progress,
-                        error_reason,
-                        error_type,
-                        error_stage,
-                        json.dumps(evidence_paths_json) if evidence_paths_json is not None else None,
-                    ),
-                )
+        self._execute_write(
+            sql,
+            (
+                store_id,
+                collected_at_iso,
+                run_id,
+                url,
+                bronze_path,
+                silver_path,
+                gold_path,
+                status,
+                progress,
+                error_reason,
+                error_type,
+                error_stage,
+                json.dumps(evidence_paths_json) if evidence_paths_json is not None else None,
+            ),
+            conn=conn,
+        )
 
     def get_snapshot(self, run_id: str):
         with self.conn() as conn:
@@ -319,6 +332,7 @@ class ApiDatabase:
         ad_review_ratio: float,
         review_summary_json: dict[str, Any] | None = None,
         categories_json: list[Any] | None = None,
+        conn: Any | None = None,
     ) -> None:
         sql = """
         INSERT INTO analysis
@@ -343,24 +357,23 @@ class ApiDatabase:
             categories_json = EXCLUDED.categories_json,
             updated_at = NOW();
         """
-        with self.conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    (
-                        store_id,
-                        collected_at_iso,
-                        run_id,
-                        summary_3lines,
-                        vibe,
-                        psycopg2.extras.Json(signature_menu_json or []),
-                        psycopg2.extras.Json(tips_json or []),
-                        score,
-                        ad_review_ratio,
-                        psycopg2.extras.Json(review_summary_json or {}),
-                        psycopg2.extras.Json(categories_json or []),
-                    ),
-                )
+        self._execute_write(
+            sql,
+            (
+                store_id,
+                collected_at_iso,
+                run_id,
+                summary_3lines,
+                vibe,
+                psycopg2.extras.Json(signature_menu_json or []),
+                psycopg2.extras.Json(tips_json or []),
+                score,
+                ad_review_ratio,
+                psycopg2.extras.Json(review_summary_json or {}),
+                psycopg2.extras.Json(categories_json or []),
+            ),
+            conn=conn,
+        )
 
     def get_store(self, store_id: str):
         with self.conn() as conn:

@@ -11,16 +11,19 @@ from urllib.request import Request, urlopen
 from playwright.async_api import async_playwright
 
 
-_BLOCKED_MARKERS = (
+_STRONG_BLOCKED_MARKERS = (
     "비정상적인 접근",
-    "자동화된",
-    "자동화",
     "captcha",
     "access denied",
     "are you human",
     "unusual traffic",
     "verify you are human",
     "로봇이 아닙니다",
+)
+
+_WEAK_BLOCKED_MARKERS = (
+    "자동화된",
+    "자동화",
 )
 
 
@@ -84,18 +87,23 @@ class NaverMapsCrawler:
             reviews: list[str] = []
             latitude: float | None = None
             longitude: float | None = None
+            frame_found = False
+            review_count_before_mobile = 0
+            mobile_fallback_used = False
 
             frame = await self._get_entry_frame(page=page, retries=3, retry_delay_ms=700)
             if frame:
+                frame_found = True
                 try:
                     name, address = await self._extract_name_address_with_retry(
                         frame=frame, retries=3, retry_delay_ms=450
                     )
-                    reviews = await self._extract_reviews_with_retry(frame=frame, retries=3)
+                    reviews = await self._extract_reviews_with_retry(frame=frame, retries=4, min_target=20)
                     html = await frame.content()
                     latitude, longitude = await self._extract_coordinates(page=page, frame=frame)
                 except Exception:
                     pass
+            review_count_before_mobile = len(reviews)
 
             html_name, html_address = self._extract_name_address_from_html(html)
             if not name:
@@ -113,6 +121,7 @@ class NaverMapsCrawler:
 
             # Fallback route: if iframe extraction is weak, use mobile place pages.
             if place_id and (not name or len(reviews) < 3):
+                mobile_fallback_used = True
                 mobile = await self._crawl_mobile_fallback(context=context, place_id=place_id, delay_ms=delay_ms)
                 if mobile:
                     name = name or mobile.get("name", "")
@@ -158,6 +167,16 @@ class NaverMapsCrawler:
                 "latitude": latitude,
                 "longitude": longitude,
                 "review_count": len(reviews),
+                "review_count_before_mobile": review_count_before_mobile,
+                "mobile_fallback_used": mobile_fallback_used,
+                "frame_found": frame_found,
+                "extraction_route": (
+                    "desktop+mobile"
+                    if mobile_fallback_used and review_count_before_mobile > 0
+                    else "mobile_only"
+                    if mobile_fallback_used
+                    else "desktop_only"
+                ),
                 "reviews": reviews,
                 "raw_html": html,
                 "page_screenshot_bytes": page_screenshot_bytes,
@@ -232,15 +251,52 @@ class NaverMapsCrawler:
             await asyncio.sleep(retry_delay_ms / 1000.0)
         return name.strip(), address.strip()
 
-    async def _extract_reviews_with_retry(self, frame, retries: int) -> list[str]:
+    async def _extract_reviews_with_retry(self, frame, retries: int, min_target: int = 20) -> list[str]:
         merged: list[str] = []
         for idx in range(max(1, retries)):
+            await self._open_review_tab(frame)
             blocks = await self._extract_reviews(frame, scroll_rounds=8 + idx * 4)
             merged.extend(blocks)
             merged = self._dedupe_texts(merged)
-            if len(merged) >= 20:
+            if len(merged) >= min_target:
                 break
+            try:
+                await frame.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
+            await asyncio.sleep(0.6 + idx * 0.2)
         return merged[:500]
+
+    async def _open_review_tab(self, frame) -> None:
+        selectors = [
+            re.compile(r"방문자\s*리뷰", re.IGNORECASE),
+            re.compile(r"리뷰", re.IGNORECASE),
+            re.compile(r"visitor reviews", re.IGNORECASE),
+        ]
+        for selector in selectors:
+            try:
+                tab = frame.get_by_text(selector, exact=False).first
+                if await tab.count() > 0:
+                    await tab.click(timeout=3000)
+                    await asyncio.sleep(1.0)
+                    return
+            except Exception:
+                continue
+
+        fallback_selectors = [
+            "[role='tab']:has-text('리뷰')",
+            "a:has-text('리뷰')",
+            "button:has-text('리뷰')",
+        ]
+        for selector in fallback_selectors:
+            try:
+                loc = frame.locator(selector).first
+                if await loc.count() > 0:
+                    await loc.click(timeout=3000)
+                    await asyncio.sleep(1.0)
+                    return
+            except Exception:
+                continue
 
     async def _first_text(self, frame, selectors: list[str]) -> str:
         for selector in selectors:
@@ -252,14 +308,6 @@ class NaverMapsCrawler:
         return ""
 
     async def _extract_reviews(self, frame, scroll_rounds: int = 8) -> list[str]:
-        try:
-            tabs = frame.get_by_text(re.compile(r"리뷰|방문자리뷰|Visitor Reviews"), exact=False)
-            if await tabs.count() > 0:
-                await tabs.first.click()
-                await asyncio.sleep(1.2)
-        except Exception:
-            pass
-
         for _ in range(max(1, scroll_rounds)):
             try:
                 await frame.evaluate("window.scrollBy(0, 1800)")
@@ -350,12 +398,12 @@ class NaverMapsCrawler:
             review_url = f"https://m.place.naver.com/restaurant/{place_id}/review/visitor"
             await page.goto(review_url, wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(1.0)
-            for _ in range(8):
+            for _ in range(12):
                 try:
                     await page.evaluate("window.scrollBy(0, 1800)")
                 except Exception:
                     pass
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.4)
 
             blocks: list[str] = await page.evaluate(
                 """() => {
@@ -503,9 +551,21 @@ class NaverMapsCrawler:
             return None
 
         combined = f"{final_url}\n{html_main}\n{html}".lower()
-        for marker in _BLOCKED_MARKERS:
-            if marker.lower() in combined:
-                return f"blocked suspected: marker={marker}"
+        strong_hits = [marker for marker in _STRONG_BLOCKED_MARKERS if marker.lower() in combined]
+        weak_hits = [marker for marker in _WEAK_BLOCKED_MARKERS if marker.lower() in combined]
+        if not strong_hits and not weak_hits:
+            return None
+
+        final_url_suspicious = any(token in final_url.lower() for token in ("captcha", "verify", "denied", "blocked"))
+        no_real_content = not name and len(reviews) == 0
+        very_weak_content = not name and len(reviews) < 2
+
+        if strong_hits and (no_real_content or final_url_suspicious):
+            return f"blocked suspected: marker={','.join(strong_hits)}"
+        if len(strong_hits) >= 2 and very_weak_content:
+            return f"blocked suspected: marker={','.join(strong_hits)}"
+        if strong_hits and weak_hits and very_weak_content:
+            return f"blocked suspected: marker={','.join(strong_hits + weak_hits)}"
         return None
 
     async def _safe_screenshot(self, page) -> bytes | None:

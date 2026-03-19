@@ -6,7 +6,7 @@ from datetime import datetime
 
 from apps.worker.crawler import CrawlBlockedError, NaverMapsCrawler
 from apps.worker.db import WorkerDatabase
-from apps.worker.dq import DQError, validate_reviews
+from apps.worker.dq import DQError, InsufficientReviewsError, validate_reviews
 from apps.worker.embeddings import EmbeddingGenerator
 from apps.worker.llm import ChunkedAnalyzer
 from apps.worker.parser import parse_reviews_html, to_jsonl
@@ -39,6 +39,8 @@ def _env_int(name: str, default: int) -> int:
 def _classify_failure(stage: str, exc: Exception) -> tuple[str, str]:
     if isinstance(exc, CrawlBlockedError):
         return "blocked_suspected", "crawl"
+    if isinstance(exc, InsufficientReviewsError):
+        return "insufficient_reviews", "parse"
     if isinstance(exc, DQError) or stage == "parse":
         return "parse_failed", "parse"
 
@@ -52,6 +54,14 @@ def _classify_failure(stage: str, exc: Exception) -> tuple[str, str]:
     if stage == "embed":
         return "embed_failed", "embed"
     return "unknown_failed", stage or "unknown"
+
+
+def _quality_band(review_count: int, min_review_count: int) -> str:
+    if review_count < min_review_count:
+        return "insufficient"
+    if review_count < max(min_review_count * 3, 10):
+        return "thin"
+    return "good"
 
 
 def _put_debug_screenshot(
@@ -81,6 +91,7 @@ def _sanitize_store_name(name: str | None, *, store_id: str, naver_place_id: str
 def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> dict:
     db = WorkerDatabase()
     minio = MinioDataLakeClient()
+    min_review_count = _env_int("MIN_REVIEW_COUNT", 3)
 
     collected_at = datetime.fromisoformat(collected_at_iso.replace("Z", "+00:00"))
     parts = KeyParts(store_id=store_id, collected_at_iso=collected_at_iso, run_id=run_id, dt=collected_at.strftime("%Y-%m-%d"))
@@ -111,7 +122,20 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
         )
 
         duration = _now_ms() - crawl_start
-        db.log_event(run_id=run_id, stage="crawl", status="ok", duration_ms=duration, payload={"review_count": crawl_result["review_count"]})
+        db.log_event(
+            run_id=run_id,
+            stage="crawl",
+            status="ok",
+            duration_ms=duration,
+            payload={
+                "review_count": crawl_result["review_count"],
+                "review_count_before_mobile": crawl_result.get("review_count_before_mobile", crawl_result["review_count"]),
+                "mobile_fallback_used": crawl_result.get("mobile_fallback_used", False),
+                "frame_found": crawl_result.get("frame_found", False),
+                "extraction_route": crawl_result.get("extraction_route", "unknown"),
+                "quality_band": _quality_band(crawl_result["review_count"], min_review_count),
+            },
+        )
         db.update_snapshot(
             run_id=run_id,
             status="crawled",
@@ -129,8 +153,25 @@ def process_job(run_id: str, store_id: str, url: str, collected_at_iso: str) -> 
             stage="parse",
             status="ok",
             duration_ms=parse_duration,
-            payload={"review_count": parse_result["review_count"]},
+            payload={
+                "review_count": parse_result["review_count"],
+                "min_review_count": min_review_count,
+                "quality_band": _quality_band(parse_result["review_count"], min_review_count),
+            },
         )
+        if parse_result["review_count"] < min_review_count:
+            db.log_event(
+                run_id=run_id,
+                stage="quality",
+                status="warn",
+                duration_ms=0,
+                payload={
+                    "review_count": parse_result["review_count"],
+                    "min_review_count": min_review_count,
+                    "message": "insufficient reviews for analysis",
+                },
+            )
+            raise InsufficientReviewsError(parse_result["review_count"], min_review_count)
         db.update_snapshot(run_id=run_id, status="parsed", progress=65, silver_path=parse_result["silver_path"])
 
         stage = "llm"

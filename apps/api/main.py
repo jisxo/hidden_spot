@@ -28,7 +28,15 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _parse_cors_allow_origins() -> list[str]:
-    default = "http://localhost:3000,http://127.0.0.1:3000"
+    # Keep local development resilient when Next.js falls back to another port.
+    default = ",".join(
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+        ]
+    )
     raw = (os.getenv("CORS_ALLOW_ORIGINS", default) or "").strip()
     if not raw:
         raw = default
@@ -118,9 +126,37 @@ def _queue() -> Queue:
     return Queue(name=queue_name, connection=conn)
 
 
+def _auto_backfill_if_empty() -> None:
+    if not _env_bool("AUTO_BACKFILL_FROM_GOLD_ON_EMPTY", True):
+        return
+
+    global _last_backfill_attempt_at
+    now = time.time()
+    cooldown_sec = _env_int("BACKFILL_COOLDOWN_SEC", 300)
+    if now - _last_backfill_attempt_at < cooldown_sec:
+        return
+
+    rows = _db.list_restaurants()
+    if rows:
+        return
+
+    with _backfill_lock:
+        rows = _db.list_restaurants()
+        if rows:
+            return
+        _last_backfill_attempt_at = now
+        max_items = _env_int("BACKFILL_MAX_ITEMS", 0)
+        backfill_serving_from_gold(db=_db, max_items=max_items)
+
+
 @app.on_event("startup")
 def startup() -> None:
     _db.ensure_tables()
+    try:
+        _auto_backfill_if_empty()
+    except Exception:
+        # Startup should stay resilient even if R2 or backfill is temporarily unavailable.
+        pass
 
 
 def _enqueue_job(url: str) -> JobCreateResponse:
@@ -252,31 +288,6 @@ def health_check():
 # Frontend compatibility endpoints (`frontend/src/app/page.tsx` uses /api/v1/restaurants*).
 @app.get("/api/v1/restaurants")
 def list_restaurants(min_score: int = Query(0, ge=0, le=100), keyword: str | None = None):
-    rows = _db.list_restaurants(min_score=min_score, keyword=keyword)
-    if rows:
-        return rows
-
-    if not _env_bool("AUTO_BACKFILL_FROM_GOLD_ON_EMPTY", True):
-        return rows
-
-    global _last_backfill_attempt_at
-    now = time.time()
-    cooldown_sec = _env_int("BACKFILL_COOLDOWN_SEC", 300)
-    if now - _last_backfill_attempt_at < cooldown_sec:
-        return rows
-
-    with _backfill_lock:
-        # Another request may have already backfilled before lock acquisition.
-        rows = _db.list_restaurants(min_score=min_score, keyword=keyword)
-        if rows:
-            return rows
-        _last_backfill_attempt_at = now
-        max_items = _env_int("BACKFILL_MAX_ITEMS", 0)
-        try:
-            backfill_serving_from_gold(db=_db, max_items=max_items)
-        except Exception:
-            return rows
-
     return _db.list_restaurants(min_score=min_score, keyword=keyword)
 
 

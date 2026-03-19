@@ -91,6 +91,8 @@ function toErrorTypeLabel(errorType?: string | null): string {
   switch (errorType) {
     case "blocked_suspected":
       return "차단 의심";
+    case "insufficient_reviews":
+      return "리뷰 수 부족";
     case "parse_failed":
       return "파싱 실패";
     case "crawl_timeout":
